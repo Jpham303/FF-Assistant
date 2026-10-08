@@ -10,7 +10,8 @@ RUN uv sync --no-dev --no-install-project
 
 COPY src ./src
 COPY dagster_defs ./dagster_defs
-COPY dagster.yaml workspace.yaml ./
+COPY dagster.yaml workspace.yaml alembic.ini ./
+COPY migrations ./migrations
 RUN uv sync --no-dev
 
 ENV PATH="/app/.venv/bin:$PATH" DAGSTER_HOME=/app/.dagster_home

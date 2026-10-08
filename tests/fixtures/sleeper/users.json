@@ -1,0 +1,5 @@
+[
+  {"user_id": "u-1", "display_name": "manager_one", "metadata": {"team_name": "Gridiron Gang"}},
+  {"user_id": "u-4", "display_name": "manager_four", "metadata": {}},
+  {"user_id": "u-me", "display_name": "me_user", "metadata": {"team_name": "My Team"}}
+]

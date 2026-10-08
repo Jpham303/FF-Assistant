@@ -20,6 +20,9 @@ dependencies = [
     "dagster-webserver>=1.8",
 ]
 
+[project.scripts]
+ffa = "ffa.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8.3",

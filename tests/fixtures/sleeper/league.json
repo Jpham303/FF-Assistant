@@ -1,0 +1,14 @@
+{
+  "league_id": "900000000000000001",
+  "name": "Test League",
+  "season": "2026",
+  "status": "in_season",
+  "sport": "nfl",
+  "total_rosters": 12,
+  "roster_positions": ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "K", "DEF",
+                       "BN", "BN", "BN", "BN", "BN", "BN", "IR"],
+  "settings": {"num_teams": 12, "reserve_slots": 1, "taxi_slots": 0, "playoff_week_start": 15},
+  "scoring_settings": {"pass_yd": 0.04, "pass_td": 4, "pass_int": -1, "rush_yd": 0.1,
+                       "rush_td": 6, "rec": 0.5, "rec_yd": 0.1, "rec_td": 6, "fum_lost": -2,
+                       "pass_2pt": 2, "rush_2pt": 2, "rec_2pt": 2}
+}

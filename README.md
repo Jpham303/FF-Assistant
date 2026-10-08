@@ -58,6 +58,26 @@ at import by normalized name and position, then team. Ambiguous names are never 
 Data lands in `data/warehouse/{dataset}/season=YYYY/week=WW/`. Query it with
 `ffa.warehouse.duck.connect()`; use `duck.as_of()` to see data as it stood at a past moment.
 
+## Connect your league
+
+```bash
+uv run ffa leagues sleeper <your_username>          # find your league ID
+uv run ffa sync sleeper <league_id> --dry-run       # preview the import and match report
+```
+
+Then set `SLEEPER_USERNAME` and `SLEEPER_LEAGUE_ID` in `.env`. The `sleeper_league` asset
+syncs settings, teams and rosters into Postgres hourly (`hourly_leagues` schedule), and
+logs any player it could not match.
+
+| Table | Contents |
+| --- | --- |
+| `leagues` | lineup slots, bench/IR/taxi sizes, raw scoring settings |
+| `teams` | owner, record, points for, which team is yours |
+| `roster_entries` | every rostered player: canonical key, how it was matched, starter/bench/IR slot |
+
+Database schema changes go through Alembic (`migrations/`); the `migrate` service applies
+them on `docker compose up`.
+
 ## Develop
 
 ```bash

@@ -18,7 +18,10 @@ from dagster import (
 )
 
 from ffa.config import settings
+from ffa.db.session import session as db_session
 from ffa.ingest import ids, nflverse
+from ffa.leagues import sync
+from ffa.leagues.sleeper import SleeperAdapter
 from ffa.warehouse import duck, store
 
 FIRST_SEASON = 2015
@@ -94,6 +97,8 @@ def player_ids(context: AssetExecutionContext) -> MaterializeResult:
         ids.load_nflverse_players(), rosters, ids.load_dynastyprocess(), sleeper
     )
     store.write_dim(xw, settings.warehouse_dir, "player_ids")
+    if sleeper is not None:  # names for Sleeper IDs the crosswalk doesn't know yet
+        store.write_dim(sleeper, settings.warehouse_dir, "sleeper_players")
 
     active = xw.filter(
         pl.col("position").is_in(ids.FANTASY_POSITIONS)
@@ -121,8 +126,49 @@ def nightly_dims(context: ScheduleEvaluationContext):
     return RunRequest(run_key=f"dims-{context.scheduled_execution_time}")
 
 
+@asset(group_name="leagues", deps=["player_ids"])
+def sleeper_league(context: AssetExecutionContext) -> MaterializeResult:
+    """Your Sleeper league's settings, teams and rosters, resolved to canonical player keys
+    and stored in Postgres. Skipped when SLEEPER_LEAGUE_ID is not set."""
+    if not settings.sleeper_league_id:
+        context.log.info("SLEEPER_LEAGUE_ID not set; skipping")
+        return MaterializeResult(metadata={"skipped": True})
+
+    resolver = ids.Resolver(
+        duck.connect(settings.warehouse_dir).sql("select * from player_ids").pl()
+    )
+    adapter = SleeperAdapter(
+        me=settings.sleeper_username or None,
+        players=sync.load_sleeper_players(settings.warehouse_dir),
+    )
+    with db_session() as db:
+        rep = sync.sync(adapter, settings.sleeper_league_id, resolver, db)
+    for u in rep.unmatched:
+        context.log.warning(f"Unmatched player on {u.team}: {u.platform_id} {u.name or ''}")
+    return MaterializeResult(
+        metadata={
+            "league": rep.league,
+            "teams": rep.teams,
+            "players": rep.players,
+            "match_rate": round(rep.match_rate, 4),
+            "by_method": str(rep.by_method),
+            "unmatched": str([u.platform_id for u in rep.unmatched]),
+            "unsupported_slots": str(rep.unsupported_slots),
+        }
+    )
+
+
+leagues_job = define_asset_job("leagues_refresh", selection=AssetSelection.groups("leagues"))
+
+
+@schedule(job=leagues_job, cron_schedule="15 * * * *", execution_timezone="America/Chicago")
+def hourly_leagues(context: ScheduleEvaluationContext):
+    """Rosters change with waivers and trades; resync hourly."""
+    return RunRequest(run_key=f"leagues-{context.scheduled_execution_time}")
+
+
 defs = Definitions(
-    assets=[*ingest_assets, player_ids],
-    jobs=[nflverse_job, injuries_job, dims_job],
-    schedules=[nightly_current_season, hourly_injuries, nightly_dims],
+    assets=[*ingest_assets, player_ids, sleeper_league],
+    jobs=[nflverse_job, injuries_job, dims_job, leagues_job],
+    schedules=[nightly_current_season, hourly_injuries, nightly_dims, hourly_leagues],
 )
