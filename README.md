@@ -45,6 +45,15 @@ After that, two schedules keep the current season fresh (turn them on in the UI)
 | --- | --- | --- |
 | `nightly_current_season` | 2:15am Central | all datasets for the current season |
 | `hourly_injuries` | :05 every hour | injury reports and rosters, kept as timestamped snapshots |
+| `nightly_dims` | 2:45am Central | player ID crosswalk (nflverse ↔ Sleeper ↔ Yahoo) |
+
+### Player IDs
+
+Every player is keyed by nflverse's `gsis_id`; team defenses use `DST_<TEAM>`. The
+`player_ids` table maps Sleeper and Yahoo IDs onto it from three sources (Sleeper's player
+DB, nflverse rosters, DynastyProcess), recording which source supplied each ID and flagging
+disagreements. Players with no platform ID — usually recent rookies on Yahoo — are matched
+at import by normalized name and position, then team. Ambiguous names are never guessed.
 
 Data lands in `data/warehouse/{dataset}/season=YYYY/week=WW/`. Query it with
 `ffa.warehouse.duck.connect()`; use `duck.as_of()` to see data as it stood at a past moment.

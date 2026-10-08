@@ -20,6 +20,15 @@ def _partition_dir(root: Path, dataset: str, season: int, week: int) -> Path:
     return root / dataset / f"season={season}" / f"week={week:02d}"
 
 
+def write_dim(df: pl.DataFrame, root: str | Path, name: str) -> Path:
+    """Write an unpartitioned dimension table (e.g. player_ids) to {root}/dims/{name}.parquet."""
+    out = Path(root) / "dims"
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"{name}.parquet"
+    df.write_parquet(path)
+    return path
+
+
 def write(
     df: pl.DataFrame,
     root: str | Path,

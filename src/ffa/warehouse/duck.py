@@ -3,6 +3,7 @@
 For each dataset two views are created:
     {dataset}          latest snapshot per (season, week) — what the app uses
     {dataset}_history  every snapshot — what the backtest uses with `as_of`
+Each file in dims/ (e.g. player_ids) becomes a plain view of the same name.
 """
 
 from __future__ import annotations
@@ -16,7 +17,14 @@ import duckdb
 def connect(root: str | Path, database: str = ":memory:") -> duckdb.DuckDBPyConnection:
     root = Path(root)
     con = duckdb.connect(database)
-    for ds_dir in sorted(p for p in root.iterdir() if p.is_dir()) if root.exists() else []:
+    dirs = sorted(p for p in root.iterdir() if p.is_dir()) if root.exists() else []
+    for dim in sorted((root / "dims").glob("*.parquet")) if root.exists() else []:
+        con.execute(
+            f"CREATE OR REPLACE VIEW {dim.stem} AS SELECT * FROM read_parquet('{dim.as_posix()}')"
+        )
+    for ds_dir in dirs:
+        if ds_dir.name == "dims":
+            continue
         name = ds_dir.name
         glob = (ds_dir / "**" / "*.parquet").as_posix()
         con.execute(

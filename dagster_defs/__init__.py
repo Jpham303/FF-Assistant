@@ -3,6 +3,7 @@
 No `from __future__ import annotations` here: Dagster inspects the real type of `context`.
 """
 
+import polars as pl
 from dagster import (
     AssetExecutionContext,
     AssetSelection,
@@ -17,8 +18,8 @@ from dagster import (
 )
 
 from ffa.config import settings
-from ffa.ingest import nflverse
-from ffa.warehouse import store
+from ffa.ingest import ids, nflverse
+from ffa.warehouse import duck, store
 
 FIRST_SEASON = 2015
 CURRENT = str(settings.current_season)
@@ -57,12 +58,10 @@ ingest_assets = [_make_asset(name) for name in nflverse.DATASETS]
 nflverse_job = define_asset_job(
     "nflverse_ingest",
     selection=AssetSelection.groups("nflverse"),
-    partitions_def=season_partitions,
 )
 injuries_job = define_asset_job(
     "injuries_refresh",
     selection=AssetSelection.assets("injuries", "rosters"),
-    partitions_def=season_partitions,
 )
 
 
@@ -78,8 +77,52 @@ def hourly_injuries(context: ScheduleEvaluationContext):
     return RunRequest(partition_key=CURRENT, run_key=f"hourly-{context.scheduled_execution_time}")
 
 
+@asset(group_name="dims", deps=["rosters"])
+def player_ids(context: AssetExecutionContext) -> MaterializeResult:
+    """Crosswalk from nflverse gsis_id to Sleeper and Yahoo IDs, with source and conflicts."""
+    rosters = (
+        duck.connect(settings.warehouse_dir)
+        .sql("select gsis_id, sleeper_id, yahoo_id, season, week from rosters")
+        .pl()
+    )
+    try:
+        sleeper = ids.load_sleeper_players()
+    except Exception as exc:  # the other sources still produce a usable crosswalk
+        context.log.warning(f"Sleeper player DB unavailable, continuing without it: {exc}")
+        sleeper = None
+    xw = ids.build_crosswalk(
+        ids.load_nflverse_players(), rosters, ids.load_dynastyprocess(), sleeper
+    )
+    store.write_dim(xw, settings.warehouse_dir, "player_ids")
+
+    active = xw.filter(
+        pl.col("position").is_in(ids.FANTASY_POSITIONS)
+        & (pl.col("last_season") >= settings.current_season - 1)
+    )
+    return MaterializeResult(
+        metadata={
+            "players": xw.height,
+            "active_fantasy_players": active.height,
+            "active_with_sleeper_id": int(active["sleeper_id"].is_not_null().sum()),
+            "active_with_yahoo_id": int(active["yahoo_id"].is_not_null().sum()),
+            "sleeper_id_conflicts": int(xw["sleeper_id_conflict"].sum()),
+            "yahoo_id_conflicts": int(xw["yahoo_id_conflict"].sum()),
+            "sleeper_db_used": sleeper is not None,
+        }
+    )
+
+
+dims_job = define_asset_job("dims_refresh", selection=AssetSelection.groups("dims"))
+
+
+@schedule(job=dims_job, cron_schedule="45 2 * * *", execution_timezone="America/Chicago")
+def nightly_dims(context: ScheduleEvaluationContext):
+    """Rebuild the ID crosswalk after the nightly roster load."""
+    return RunRequest(run_key=f"dims-{context.scheduled_execution_time}")
+
+
 defs = Definitions(
-    assets=ingest_assets,
-    jobs=[nflverse_job, injuries_job],
-    schedules=[nightly_current_season, hourly_injuries],
+    assets=[*ingest_assets, player_ids],
+    jobs=[nflverse_job, injuries_job, dims_job],
+    schedules=[nightly_current_season, hourly_injuries, nightly_dims],
 )
