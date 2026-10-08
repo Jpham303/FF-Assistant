@@ -1,0 +1,33 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+oauth*.json
+yahoo_token*.json
+
+# Data — rebuilt by the pipeline, never committed
+data/
+*.parquet
+*.duckdb
+*.duckdb.wal
+
+# Dagster runtime
+.dagster_home/
+tmp*/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
