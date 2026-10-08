@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://ffa:change-me@localhost:5432/ffa"
     warehouse_dir: str = "./data/warehouse"
+    current_season: int = 2026
 
     sleeper_username: str = ""
     sleeper_league_id: str = ""

@@ -33,6 +33,22 @@ docker compose up --build
 - API: http://localhost:8000/health
 - Dagster: http://localhost:3000
 
+## Load data
+
+The first time, backfill every season (about 30 seconds, ~100 MB):
+
+- Dagster UI → **Assets** → group `nflverse` → **Materialize all** → select all partitions
+
+After that, two schedules keep the current season fresh (turn them on in the UI):
+
+| Schedule | When | What |
+| --- | --- | --- |
+| `nightly_current_season` | 2:15am Central | all datasets for the current season |
+| `hourly_injuries` | :05 every hour | injury reports and rosters, kept as timestamped snapshots |
+
+Data lands in `data/warehouse/{dataset}/season=YYYY/week=WW/`. Query it with
+`ffa.warehouse.duck.connect()`; use `duck.as_of()` to see data as it stood at a past moment.
+
 ## Develop
 
 ```bash
