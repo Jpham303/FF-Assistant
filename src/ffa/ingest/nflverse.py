@@ -29,6 +29,7 @@ DATASETS: dict[str, Dataset] = {
     d.name: d
     for d in [
         Dataset("player_stats", f"{RELEASES}/stats_player/stats_player_week_{{season}}.parquet"),
+        Dataset("team_stats", f"{RELEASES}/stats_team/stats_team_week_{{season}}.parquet"),
         Dataset("snap_counts", f"{RELEASES}/snap_counts/snap_counts_{{season}}.parquet"),
         Dataset("schedules", f"{RELEASES}/schedules/games.parquet", per_season=False),
         Dataset("injuries", f"{RELEASES}/injuries/injuries_{{season}}.parquet", volatile=True),

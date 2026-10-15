@@ -78,6 +78,28 @@ logs any player it could not match.
 Database schema changes go through Alembic (`migrations/`); the `migrate` service applies
 them on `docker compose up`.
 
+## Scoring
+
+The engine projects and scores **raw stats**, then applies each league's rules, so any
+scoring system works without retraining anything.
+
+```python
+from ffa.scoring import stat_lines, score, breakdown, from_sleeper
+rules = from_sleeper(league.scoring)        # platform settings -> canonical rules
+pts = score(stat_lines(player_stats, team_stats, schedules), rules)
+why = breakdown(...)                         # per-term points, for explanations
+```
+
+- **Canonical stats** follow Sleeper's vocabulary (`rec`, `pass_yd`, `fgm_yds`, `pts_allow`…),
+  built from nflverse player and team stats. Defenses are scored from team stats and the
+  final score.
+- **Rules** are linear terms, bands (points-allowed tiers, yardage bonuses) and
+  position-specific terms (TE premium). Platform settings we can't compute are listed in
+  `rules.unsupported` or `rules.approximate`, never silently dropped.
+- **Verified** against nflverse's own fantasy points on every player-week since 2015:
+  100% agreement, the only differences being fumbles lost on kick returns, which nflverse
+  omits and the platforms count (`tests/test_scoring_data.py`).
+
 ## Develop
 
 ```bash
