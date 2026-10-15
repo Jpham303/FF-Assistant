@@ -115,6 +115,29 @@ per-term breakdown for it:
 uv run ffa check-scoring sleeper <league_id>
 ```
 
+## Projections
+
+A simulation model, not a single-number guess. Each week, every game is simulated 2,000
+times from data available before kickoff:
+
+1. **Team volume** from the betting lines plus team tendencies: plays, pass rate, TDs, FGs
+2. **Player shares** (targets, carries, dropbacks, red-zone looks) and **efficiency**,
+   recency-weighted and shrunk toward priors fitted from data
+3. **Matchups**: where each defense gives up production relative to expectation
+4. **Availability** from injury status, final practice and role
+5. Players' stat lines from their team's simulated game (the QB's passing is the sum of
+   his receivers'; a defense's points allowed is the opponent's simulated score), scored
+   with the league's rules
+
+**2025 holdout** (model frozen before it was run; details in
+[docs/evaluation_2025.md](docs/evaluation_2025.md)):
+
+| | Model | Season average | Opportunity average |
+| --- | --- | --- | --- |
+| Start/sit, all startable pairs | **62.3%** | 58.9% | 61.1% |
+| Start/sit, close calls | **58.9%** | 53.6% | 56.0% |
+| Projection error | lowest at every position | | |
+
 ## Develop
 
 ```bash

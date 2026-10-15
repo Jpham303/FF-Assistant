@@ -4,6 +4,7 @@ ffa leagues sleeper jpham03            list your Sleeper leagues and their IDs
 ffa sync sleeper <league_id>           fetch, resolve and store a league; print the report
 ffa sync sleeper <league_id> --dry-run same, without writing to the database
 ffa check-scoring sleeper <league_id>  our points vs Sleeper's, every completed week
+ffa evaluate --season 2025 --scoring s.json   holdout accuracy vs baselines
 """
 
 from __future__ import annotations
@@ -109,6 +110,47 @@ def _check_scoring(args: argparse.Namespace) -> int:
     return 0 if rep.mismatched == 0 else 1
 
 
+def _evaluate(args: argparse.Namespace) -> int:
+    import json
+    from pathlib import Path
+
+    import polars as pl
+
+    from ffa import evaluate
+    from ffa.model.inputs import Models
+    from ffa.model.matchup import MatchupModel
+    from ffa.model.player import PlayerModel
+    from ffa.model.sim_params import SimParams
+    from ffa.model.team import TeamModel
+    from ffa.scoring import from_sleeper
+    from ffa.warehouse import duck
+
+    m = Path(settings.models_dir)
+    models = Models(
+        TeamModel.load(m / "team_volume.json"),
+        PlayerModel.load(m / "player.json"),
+        MatchupModel.load(m / "matchup.json"),
+        SimParams.load(m / "sim_params.json"),
+    )
+    rules = from_sleeper(json.loads(Path(args.scoring).read_text()))
+    lo, hi = (int(x) for x in args.weeks.split("-"))
+    con = duck.connect(settings.warehouse_dir)
+    h = evaluate.run(con, args.season, list(range(lo, hi + 1)), models, rules, n_sims=args.sims)
+    pl.Config.set_tbl_cols(14)
+    pl.Config.set_tbl_width_chars(200)
+    print(f"Season {args.season}, weeks {lo}-{hi}: {h.rows.height:,} player-weeks")
+    print("\nAccuracy (MAE on games played; edge = baseline MAE - model MAE)")
+    print(evaluate.accuracy(h).with_columns(pl.col(pl.Float64).round(3)))
+    print("\nShare of outcomes inside the 10th-90th range (projection >= 5)")
+    print(evaluate.coverage(h, 5).sort("position").with_columns(pl.col(pl.Float64).round(3)))
+    acc, calib = evaluate.start_sit(h)
+    print("\nStart/sit: picks the higher scorer")
+    print(acc.with_columns(pl.col("accuracy").round(3)))
+    print("\nP(A outscores B): said vs happened")
+    print(calib.with_columns(pl.col("said", "happened").round(3)))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ffa")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -131,6 +173,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("league_id")
     p.add_argument("--weeks", type=int, nargs="+", help="default: every completed week")
     p.set_defaults(func=_check_scoring)
+
+    p = sub.add_parser("evaluate", help="out-of-sample projection evaluation vs baselines")
+    p.add_argument("--season", type=int, required=True)
+    p.add_argument("--weeks", default="1-18", help="e.g. 1-18")
+    p.add_argument("--scoring", required=True, help="league scoring settings JSON (Sleeper)")
+    p.add_argument("--sims", type=int, default=1000)
+    p.set_defaults(func=_evaluate)
 
     args = parser.parse_args(argv)
     return args.func(args)
