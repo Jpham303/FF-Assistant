@@ -26,6 +26,7 @@ from ffa.features.games import load_pbp as load_game_pbp
 from ffa.ingest import ids, nflverse
 from ffa.leagues import sync
 from ffa.leagues.sleeper import SleeperAdapter
+from ffa.model import player as player_model_mod
 from ffa.model import team as team_model
 from ffa.warehouse import duck, store
 
@@ -252,6 +253,27 @@ def team_volume_model(context: AssetExecutionContext) -> MaterializeResult:
     )
 
 
+@asset(group_name="models", deps=["player_games"])
+def player_model(context: AssetExecutionContext) -> MaterializeResult:
+    """Fit player share and efficiency shrinkage (decay and prior strength per quantity)."""
+    pg = (
+        duck.connect(settings.warehouse_dir)
+        .sql(f"select * from player_games where season <= {max(player_model_mod.VALID_SEASONS)}")
+        .pl()
+    )
+    m = player_model_mod.fit(
+        pg, player_model_mod.TRAIN_SEASONS, player_model_mod.VALID_SEASONS,
+        player_model_mod.DECAY_GRID,
+    )  # fmt: skip
+    m.save(Path(settings.models_dir) / "player.json")
+    return MaterializeResult(
+        metadata={
+            f"{n}_gain_vs_no_shrink": round(1 - v["valid_loss"] / v["no_shrink_loss"], 4)
+            for n, v in m.metrics.items()
+        }
+    )
+
+
 defs = Definitions(
     assets=[
         *ingest_assets,
@@ -260,6 +282,7 @@ defs = Definitions(
         team_games,
         player_games,
         team_volume_model,
+        player_model,
     ],
     jobs=[nflverse_job, injuries_job, dims_job, leagues_job, features_job],
     schedules=[
