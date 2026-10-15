@@ -54,7 +54,10 @@ def expectations(est: pl.DataFrame) -> pl.DataFrame:
 
 
 def defense_games(exp: pl.DataFrame) -> pl.DataFrame:
-    """One row per defense per game with actual and expected totals by position."""
+    """One row per defense per game with actual and expected totals by position.
+    Only players who actually played count (zero rows for scratches would skew it)."""
+    if "played" in exp.columns:
+        exp = exp.filter(pl.col("played"))
     aggs = []
     for name, r in RATINGS.items():
         in_pos = pl.col("position") == r["pos"]
@@ -119,7 +122,8 @@ def fit(exp_games: pl.DataFrame, valid: list[int]) -> MatchupModel:
     for name, r in RATINGS.items():
         rows = va_players.filter(
             (pl.col("position") == r["pos"]) & pl.col(r["exp"]).is_not_null()
-        ).select("game_id", "opponent", r["act"], r["exp"])
+            & (pl.col("played") if "played" in va_players.columns else pl.lit(True))
+        ).select("game_id", "opponent", r["act"], r["exp"])  # fmt: skip
         trials = []
         for d, h in hists.items():
             rated = rows.join(

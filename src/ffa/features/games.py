@@ -212,9 +212,15 @@ def player_game_log(
     player_ids: pl.DataFrame,
     injuries: pl.DataFrame,
     teams: pl.DataFrame,
+    rosters: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
-    """One row per player per game played: opportunities, canonical stat outcomes, snaps,
-    injury status going in, and team totals for share denominators."""
+    """One row per player per team-game: opportunities, canonical stat outcomes, snaps,
+    injury status going in, and team totals for share denominators.
+
+    `played` marks games the player recorded a stat in. With `rosters`, healthy
+    active-roster players who did not play get a row too, with zero opportunities: a
+    backup's expected share must count the weeks he sat. Weeks missed while on the injury
+    report are left out (availability is modeled separately)."""
     stats = (
         player_stat_lines(player_stats)
         .with_columns(
@@ -245,4 +251,43 @@ def player_game_log(
     )
     fill = ["targets", "rz_targets", "ez_targets", "air_yards", "designed_carries",
             "scrambles", "rz_carries", "gl_carries", "dropbacks", "snaps"]  # fmt: skip
-    return out.with_columns(pl.col(fill).fill_null(0.0)).sort("season", "week", "key")
+    out = out.with_columns(pl.col(fill).fill_null(0.0), pl.lit(True).alias("played"))
+    if rosters is not None:
+        out = pl.concat([out, _unplayed(rosters, injuries, team_cols, out)],
+                        how="diagonal_relaxed")  # fmt: skip
+    return out.sort("season", "week", "key")
+
+
+def _unplayed(
+    rosters: pl.DataFrame, injuries: pl.DataFrame, team_cols: pl.DataFrame, played: pl.DataFrame
+) -> pl.DataFrame:
+    """Zero-opportunity rows for healthy active-roster players who didn't play."""
+    ros = (
+        rosters.filter(
+            (pl.col("status") == "ACT")
+            & pl.col("gsis_id").is_not_null()
+            & pl.col("position").replace(POSITION_MAP).is_in(SKILL)
+        )
+        .select(
+            pl.col("gsis_id").alias("key"),
+            pl.col("season").cast(pl.Int32),
+            pl.col("week").cast(pl.Int32),
+            pl.col("team").replace(TEAM_ALIASES),
+            pl.col("position").replace(POSITION_MAP),
+        )
+        .unique(["key", "season", "week"])
+    )
+    games = team_cols.join(
+        played.select("game_id", "season", "week").unique(), on="game_id", how="inner"
+    )
+    injured = _injury_status(injuries).filter(
+        pl.col("injury_status").is_in(["Out", "Doubtful", "Questionable"])
+    )
+    zero = (
+        ros.join(games, on=["season", "week", "team"], how="inner")
+        .join(played.select("key", "season", "week"), on=["key", "season", "week"], how="anti")
+        .join(injured.select("key", "season", "week"), on=["key", "season", "week"], how="anti")
+    )
+    counts = [c for c in played.columns if played.schema[c].is_numeric()
+              and c not in team_cols.columns and c not in ("season", "week")]  # fmt: skip
+    return zero.with_columns(*[pl.lit(0.0).alias(c) for c in counts], pl.lit(False).alias("played"))

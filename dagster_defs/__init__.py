@@ -28,7 +28,10 @@ from ffa.leagues import sync
 from ffa.leagues.sleeper import SleeperAdapter
 from ffa.model import matchup as matchup_mod
 from ffa.model import player as player_model_mod
+from ffa.model import sim_params as sim_params_mod
 from ffa.model import team as team_model
+from ffa.scoring.defense import dst_stat_lines
+from ffa.scoring.defense import load_pbp as load_dst_pbp
 from ffa.warehouse import duck, store
 
 FIRST_SEASON = 2015
@@ -203,7 +206,7 @@ def team_games(context: AssetExecutionContext) -> MaterializeResult:
 @asset(
     partitions_def=season_partitions,
     group_name="features",
-    deps=["team_games", "player_stats", "snap_counts", "injuries", "player_ids"],
+    deps=["team_games", "player_stats", "snap_counts", "injuries", "player_ids", "rosters"],
     description="One row per player-game: opportunities, outcomes, snaps, injury status.",
 )
 def player_games(context: AssetExecutionContext) -> MaterializeResult:
@@ -217,6 +220,7 @@ def player_games(context: AssetExecutionContext) -> MaterializeResult:
         con.sql("select * from player_ids").pl(),
         q("injuries"),
         q("team_games"),
+        q("rosters"),
     )
     paths = store.write(df, settings.warehouse_dir, "player_games")
     return MaterializeResult(metadata={"rows": df.height, "partitions": len(paths)})
@@ -266,6 +270,14 @@ def player_model(context: AssetExecutionContext) -> MaterializeResult:
         pg, player_model_mod.TRAIN_SEASONS, player_model_mod.VALID_SEASONS,
         player_model_mod.DECAY_GRID,
     )  # fmt: skip
+    con = duck.connect(settings.warehouse_dir)
+    first, last = min(player_model_mod.TRAIN_SEASONS), max(player_model_mod.TRAIN_SEASONS)
+    train = f"season between {first} and {last}"
+    m.unproven_prior = player_model_mod.unproven_priors(
+        con.sql(f"select * from rosters where {train}").pl(),
+        con.sql(f"select * from player_games where {train}").pl(),
+        con.sql(f"select * from team_games where {train}").pl(),
+    )
     m.save(Path(settings.models_dir) / "player.json")
     return MaterializeResult(
         metadata={
@@ -296,6 +308,55 @@ def matchup_model(context: AssetExecutionContext) -> MaterializeResult:
     )
 
 
+@asset(group_name="models", deps=["player_model", "team_volume_model", "pbp", "injuries"])
+def sim_params(context: AssetExecutionContext) -> MaterializeResult:
+    """Simulator calibration: availability, dispersion, team rates, kicking, D/ST rates."""
+    con = duck.connect(settings.warehouse_dir)
+    seasons = player_model_mod.TRAIN_SEASONS
+    train = f"season between {min(seasons)} and {max(seasons)}"
+    pm = player_model_mod.PlayerModel.load(Path(settings.models_dir) / "player.json")
+    tm = team_model.TeamModel.load(Path(settings.models_dir) / "team_volume.json")
+    pg = con.sql(f"select * from player_games where season <= {max(seasons)}").pl()
+    est = pm.estimates(pm.history(pg)).filter(pl.col("season") >= min(seasons))
+    snaps = con.sql(
+        f"""select x.gsis_id as key, s.season, s.week, max(s.offense_snaps) as snaps
+            from snap_counts s join player_ids x on x.pfr_id = s.pfr_player_id
+            where s.{train} group by 1, 2, 3"""
+    ).pl()
+    # Kicking is fitted per season and each prediction uses the latest completed one, so
+    # every season before the current one can be included without leakage.
+    kicks = con.sql(
+        f"""select season, field_goal_attempt, kick_distance, field_goal_result from pbp
+            where field_goal_attempt = 1 and season < {settings.current_season}"""
+    ).pl()
+    dst = pl.concat(
+        [
+            dst_stat_lines(
+                load_dst_pbp(con, s), con.sql(f"select * from schedules where season={s}").pl()
+            )
+            for s in seasons
+        ]
+    )
+    sp = sim_params_mod.fit(
+        est,
+        con.sql(f"select * from team_games where {train} and game_type = 'REG'").pl(),
+        con.sql(
+            f"""select * from injuries where {train} and game_type = 'REG'
+                and position in ('QB', 'RB', 'WR', 'TE', 'K')"""
+        ).pl(),
+        snaps, kicks, dst,
+        tm.metrics["off_td"]["dispersion"], tm.metrics["fg_att"]["dispersion"],
+    )  # fmt: skip
+    sp.save(Path(settings.models_dir) / "sim_params.json")
+    return MaterializeResult(
+        metadata={
+            "target_concentration": round(sp.target_concentration, 2),
+            "carry_concentration": round(sp.carry_concentration, 2),
+            "kicking_seasons": str(sorted(sp.fg_distance)),
+        }
+    )
+
+
 defs = Definitions(
     assets=[
         *ingest_assets,
@@ -306,6 +367,7 @@ defs = Definitions(
         team_volume_model,
         player_model,
         matchup_model,
+        sim_params,
     ],
     jobs=[nflverse_job, injuries_job, dims_job, leagues_job, features_job],
     schedules=[

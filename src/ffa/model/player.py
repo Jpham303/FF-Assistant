@@ -30,7 +30,7 @@ from ffa.model.asof import Decay, decayed, shrink
 
 TRAIN_SEASONS = list(range(2016, 2024))
 VALID_SEASONS = [2024]  # 2025 is the untouched holdout
-DECAY_GRID = [Decay(h, g) for h in (2, 4, 8, 16, 32, 64, 128) for g in (4, 12, 24, 48)]
+DECAY_GRID = [Decay(h, g) for h in (1, 2, 4, 8, 16, 32, 64, 128) for g in (4, 12, 24, 48)]
 
 # name -> (numerator, denominator)
 RATIOS: dict[str, tuple[str, str]] = {
@@ -89,6 +89,9 @@ class PlayerModel:
     td_rz_weight: dict[str, float]  # weight on red-zone share in the TD-share prior
     position_prior: dict[str, dict[str, float]] = field(default_factory=dict)
     depth_prior: dict[str, dict[str, list[float]]] = field(default_factory=dict)  # [a, b]
+    # Share prior for a rostered player with no games yet: what such players actually
+    # get, counting the weeks they don't play (a backup QB is not a 95%-dropback starter).
+    unproven_prior: dict[str, dict[str, float]] = field(default_factory=dict)
     metrics: dict[str, dict[str, float]] = field(default_factory=dict)
 
     # ------------------------------------------------------------ estimates
@@ -104,7 +107,14 @@ class PlayerModel:
             share, rz = TD_SHARES[name]
             w = self.td_rz_weight[name]
             return (1 - w) * pl.col(f"{share}_s") + w * pl.col(f"{rz}_s")
-        return pos.replace_strict(self.position_prior[name], default=None, return_dtype=pl.Float64)
+        prior = pos.replace_strict(self.position_prior[name], default=None,
+                                   return_dtype=pl.Float64)  # fmt: skip
+        if name in SHARES and name in self.unproven_prior:
+            unproven = pos.replace_strict(self.unproven_prior[name], default=0.0,
+                                          return_dtype=pl.Float64)  # fmt: skip
+            no_games = pl.col(f"{name}_w").fill_null(0) <= 0
+            return pl.when(no_games).then(unproven).otherwise(prior)
+        return prior
 
     def estimate(self, hist: pl.DataFrame, name: str) -> pl.DataFrame:
         return hist.with_columns(
@@ -180,6 +190,62 @@ def _priors(train: pl.DataFrame) -> tuple[dict, dict]:
     return pos_prior, depth
 
 
+def unproven_priors(
+    rosters: pl.DataFrame, player_games: pl.DataFrame, team_games: pl.DataFrame
+) -> dict[str, dict[str, float]]:
+    """Average realized share of active-roster players in weeks before their first game
+    (0 when they don't play). Pass training seasons only."""
+    pg = prepare(player_games)
+    played = pg.filter(pl.col("played")) if "played" in pg.columns else pg
+    first = played.group_by("key").agg(
+        (pl.col("season") * 100 + pl.col("week")).min().alias("first")
+    )
+    ros = (
+        rosters.filter(pl.col("status") == "ACT")
+        .select(
+            pl.col("gsis_id").alias("key"),
+            "season",
+            "week",
+            "team",
+            pl.col("position").replace({"FB": "RB"}),
+        )  # fmt: skip
+        .unique(["key", "season", "week"])
+        .join(first, on="key", how="left")
+        .filter(
+            pl.col("first").is_null() | (pl.col("first") >= pl.col("season") * 100 + pl.col("week"))
+        )
+    )
+    team_tot = team_games.filter(pl.col("plays").is_not_null()).select(
+        "season", "week", "team", "targets", "designed_runs", "dropbacks"
+    )
+    team_rz = pg.group_by("season", "week", "team").agg(
+        pl.col("rz_targets").sum().alias("rz_t"), pl.col("rz_carries").sum().alias("rz_c")
+    )
+    mine = pg.select(
+        "key", "season", "week",
+        pl.col("targets").alias("my_t"), pl.col("designed_carries").alias("my_c"),
+        pl.col("dropbacks").alias("my_d"), pl.col("rz_targets").alias("my_rzt"),
+        pl.col("rz_carries").alias("my_rzc"),
+    )  # fmt: skip
+    d = (
+        ros.join(team_tot, on=["season", "week", "team"], how="inner")
+        .join(team_rz, on=["season", "week", "team"], how="left")
+        .join(mine, on=["key", "season", "week"], how="left")
+        .with_columns(pl.col("my_t", "my_c", "my_d", "my_rzt", "my_rzc").fill_null(0))
+    )
+    ratio = lambda a, b: (pl.col(a) / pl.col(b)).fill_nan(0).fill_null(0)  # noqa: E731
+    g = d.group_by("position").agg(
+        ratio("my_t", "targets").mean().alias("tgt_share"),
+        ratio("my_rzt", "rz_t").mean().alias("rz_tgt_share"),
+        ratio("my_c", "designed_runs").mean().alias("car_share"),
+        ratio("my_rzc", "rz_c").mean().alias("rz_car_share"),
+        ratio("my_d", "dropbacks").mean().alias("db_share"),
+    )
+    return {
+        name: {r["position"]: float(r[name]) for r in g.iter_rows(named=True)} for name in SHARES
+    }
+
+
 def _loss(df: pl.DataFrame, name: str) -> float:
     """Loss for predicting this game's numerator from the estimate and actual denominator."""
     num, den = RATIOS[name]
@@ -202,8 +268,8 @@ def _loss(df: pl.DataFrame, name: str) -> float:
 
 
 K_GRID = {
-    **{n: [0.125, 0.25, 0.5, 1, 2, 4] for n in SHARES},  # in games of team evidence
-    "rec_td_share": [2, 4, 8, 16, 32], "rush_td_share": [2, 4, 8, 16, 32],
+    **{n: [0.03, 0.06, 0.125, 0.25, 0.5, 1, 2, 4] for n in SHARES},  # in games of team evidence
+    "rec_td_share": [2, 4, 8, 16, 32, 64, 128], "rush_td_share": [2, 4, 8, 16, 32, 64, 128],
     "catch_rate": [25, 50, 100, 200], "ypr": [50, 100, 200, 400, 800],
     "ypc": [6, 12, 25, 50, 100], "adot": [2.5, 5, 10, 25],
     "int_rate": [200, 400, 800, 1600, 3200], "scramble_rate": [12, 25, 50, 100, 200, 400],
