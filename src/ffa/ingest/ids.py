@@ -1,4 +1,4 @@
-"""Player ID crosswalk: nflverse gsis_id <-> Sleeper and Yahoo IDs.
+"""Player ID crosswalk: nflverse gsis_id <-> Sleeper, Yahoo and Pro Football Reference IDs.
 
 The canonical player key everywhere in the warehouse is nflverse's `gsis_id`. Platform IDs
 are mapped onto it from several sources, in priority order:
@@ -92,6 +92,7 @@ def load_nflverse_players(client: httpx.Client | None = None) -> pl.DataFrame:
         "position",
         pl.col("latest_team").alias("team"),
         "last_season",
+        "pfr_id",  # Pro Football Reference ID: how nflverse snap counts identify players
     )
 
 
@@ -170,7 +171,7 @@ def build_crosswalk(
 
     frame = _pick(frame, "sleeper_id", ["sleeper", "rosters", "dp"])
     frame = _pick(frame, "yahoo_id", ["rosters", "sleeper", "dp"])
-    keep = ["gsis_id", "name", "position", "team", "last_season"]
+    keep = ["gsis_id", "name", "position", "team", "last_season", "pfr_id"]
     out = frame.select(
         *[c for c in keep if c in frame.columns],
         "sleeper_id", "sleeper_id_source", "sleeper_id_conflict",

@@ -17,8 +17,10 @@ from dagster import (
     schedule,
 )
 
+from ffa import features
 from ffa.config import settings
 from ffa.db.session import session as db_session
+from ffa.features.games import load_pbp as load_game_pbp
 from ffa.ingest import ids, nflverse
 from ffa.leagues import sync
 from ffa.leagues.sleeper import SleeperAdapter
@@ -167,8 +169,71 @@ def hourly_leagues(context: ScheduleEvaluationContext):
     return RunRequest(run_key=f"leagues-{context.scheduled_execution_time}")
 
 
+# ---------------------------------------------------------------- features
+
+
+def _season_frames(season: int) -> dict[str, pl.DataFrame]:
+    con = duck.connect(settings.warehouse_dir)
+
+    def q(t: str) -> pl.DataFrame:
+        return con.sql(f"select * exclude (_ingested_at) from {t} where season = {season}").pl()
+
+    return {"con": con, "q": q}
+
+
+@asset(
+    partitions_def=season_partitions,
+    group_name="features",
+    deps=["pbp", "schedules"],
+    description="One row per team-game: betting lines, offense, and what the defense allowed.",
+)
+def team_games(context: AssetExecutionContext) -> MaterializeResult:
+    season = int(context.partition_key)
+    f = _season_frames(season)
+    df = features.team_game_log(load_game_pbp(f["con"], season), f["q"]("schedules"))
+    paths = store.write(df, settings.warehouse_dir, "team_games")
+    return MaterializeResult(metadata={"rows": df.height, "partitions": len(paths)})
+
+
+@asset(
+    partitions_def=season_partitions,
+    group_name="features",
+    deps=["team_games", "player_stats", "snap_counts", "injuries", "player_ids"],
+    description="One row per player-game: opportunities, outcomes, snaps, injury status.",
+)
+def player_games(context: AssetExecutionContext) -> MaterializeResult:
+    season = int(context.partition_key)
+    f = _season_frames(season)
+    con, q = f["con"], f["q"]
+    df = features.player_game_log(
+        load_game_pbp(con, season),
+        q("player_stats"),
+        q("snap_counts"),
+        con.sql("select * from player_ids").pl(),
+        q("injuries"),
+        q("team_games"),
+    )
+    paths = store.write(df, settings.warehouse_dir, "player_games")
+    return MaterializeResult(metadata={"rows": df.height, "partitions": len(paths)})
+
+
+features_job = define_asset_job("features_refresh", selection=AssetSelection.groups("features"))
+
+
+@schedule(job=features_job, cron_schedule="0 3 * * *", execution_timezone="America/Chicago")
+def nightly_features(context: ScheduleEvaluationContext):
+    """Rebuild the current season's game logs after the nightly data and ID loads."""
+    return RunRequest(partition_key=CURRENT, run_key=f"features-{context.scheduled_execution_time}")
+
+
 defs = Definitions(
-    assets=[*ingest_assets, player_ids, sleeper_league],
-    jobs=[nflverse_job, injuries_job, dims_job, leagues_job],
-    schedules=[nightly_current_season, hourly_injuries, nightly_dims, hourly_leagues],
+    assets=[*ingest_assets, player_ids, sleeper_league, team_games, player_games],
+    jobs=[nflverse_job, injuries_job, dims_job, leagues_job, features_job],
+    schedules=[
+        nightly_current_season,
+        hourly_injuries,
+        nightly_dims,
+        hourly_leagues,
+        nightly_features,
+    ],
 )
