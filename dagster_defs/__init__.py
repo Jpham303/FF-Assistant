@@ -32,6 +32,7 @@ from ffa.model import sim_params as sim_params_mod
 from ffa.model import team as team_model
 from ffa.scoring.defense import dst_stat_lines
 from ffa.scoring.defense import load_pbp as load_dst_pbp
+from ffa.service import projections as projections_mod
 from ffa.warehouse import duck, store
 
 FIRST_SEASON = 2015
@@ -357,6 +358,37 @@ def sim_params(context: AssetExecutionContext) -> MaterializeResult:
     )
 
 
+@asset(
+    group_name="projections",
+    deps=["sim_params", "matchup_model", "team_games", "player_games", "injuries", "rosters",
+          "schedules"],
+)  # fmt: skip
+def weekly_projections(context: AssetExecutionContext) -> MaterializeResult:
+    """Simulate the upcoming week with the latest injury report, for the API to serve."""
+    con = duck.connect(settings.warehouse_dir)
+    season = settings.current_season
+    week = projections_mod.upcoming_week(con, season)
+    if week is None:
+        context.log.info(f"No upcoming week in {season}; nothing to project")
+        return MaterializeResult(metadata={"week": "none"})
+    models = projections_mod.load_models(settings.models_dir)
+    r = projections_mod.run_week(con, settings.warehouse_dir, models, season, week)
+    return MaterializeResult(
+        metadata={"season": r.season, "week": r.week, "players": r.players, "rows": r.rows}
+    )
+
+
+projections_job = define_asset_job(
+    "projections_refresh", selection=AssetSelection.assets("weekly_projections")
+)
+
+
+# After the hourly injury snapshot (:05) lands, so status changes reach the projections.
+@schedule(job=projections_job, cron_schedule="25 * * * *", execution_timezone="America/Chicago")
+def hourly_projections(context: ScheduleEvaluationContext):
+    return RunRequest(run_key=f"projections-{context.scheduled_execution_time}")
+
+
 defs = Definitions(
     assets=[
         *ingest_assets,
@@ -368,13 +400,15 @@ defs = Definitions(
         player_model,
         matchup_model,
         sim_params,
+        weekly_projections,
     ],
-    jobs=[nflverse_job, injuries_job, dims_job, leagues_job, features_job],
+    jobs=[nflverse_job, injuries_job, dims_job, leagues_job, features_job, projections_job],
     schedules=[
         nightly_current_season,
         hourly_injuries,
         nightly_dims,
         hourly_leagues,
         nightly_features,
+        hourly_projections,
     ],
 )

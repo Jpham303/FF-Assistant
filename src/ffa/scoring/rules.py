@@ -170,3 +170,22 @@ def nflverse_standard(ppr: float = 1.0) -> ScoringRules:
             "st_td": 6, "fum_lost": -2,
         },
     )  # fmt: skip
+
+
+# Standard Sleeper half-PPR settings, used when no league is specified.
+DEFAULT_SLEEPER_SCORING = {
+    "pass_yd": 0.04, "pass_td": 4, "pass_int": -1, "pass_2pt": 2,
+    "rush_yd": 0.1, "rush_td": 6, "rush_2pt": 2,
+    "rec": 0.5, "rec_yd": 0.1, "rec_td": 6, "rec_2pt": 2,
+    "fum_lost": -2, "st_td": 6, "fum_rec_td": 6,
+    "fgm_0_19": 3, "fgm_20_29": 3, "fgm_30_39": 3, "fgm_40_49": 4, "fgm_50p": 5,
+    "fgmiss": -1, "xpm": 1, "xpmiss": -1,
+    "sack": 1, "int": 2, "fum_rec": 2, "safe": 2, "def_td": 6, "def_st_td": 6, "blk_kick": 2,
+    "ff": 1, "def_st_fum_rec": 1, "def_st_ff": 1,
+    "pts_allow_0": 10, "pts_allow_1_6": 7, "pts_allow_7_13": 4, "pts_allow_14_20": 1,
+    "pts_allow_28_34": -1, "pts_allow_35p": -4,
+}  # fmt: skip
+
+
+def default_rules() -> ScoringRules:
+    return from_sleeper(DEFAULT_SLEEPER_SCORING)

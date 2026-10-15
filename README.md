@@ -138,6 +138,23 @@ times from data available before kickoff:
 | Start/sit, close calls | **58.9%** | 53.6% | 56.0% |
 | Projection error | lowest at every position | | |
 
+## API
+
+The weekly projections job (`weekly_projections`, hourly at :25 after the injury snapshot)
+simulates the upcoming week and stores league-neutral stat lines, so any league's scoring
+is applied at request time. Interactive docs at http://localhost:8000/docs.
+
+| Endpoint | What it returns |
+| --- | --- |
+| `GET /week` | current season, upcoming week, whether projections exist |
+| `GET /players/search?q=` | player keys by name, typos allowed; `match` (1.0 = exact) and `projected` (false on a bye). A bye-week player is reported as not playing, never swapped for a similar name |
+| `GET /projections?keys=` | mean, median, 10th–90th percentile, play probability, expected stats, points per scoring rule, and plain-language drivers each carrying its number |
+| `POST /start-sit` | 2–6 players: recommendation, P(each outscores each other) from simulations that share each game, close-call and injury notes |
+| `GET /leagues/{id}/my-team` | best lineup for your roster under the league's slots and scoring; bench; who isn't playing |
+
+Pass `league` (e.g. `sleeper:<league_id>`) to score with that league's settings; without
+it, `SLEEPER_LEAGUE_ID` or standard half-PPR is used.
+
 ## Develop
 
 ```bash
@@ -148,4 +165,4 @@ uv run pytest
 
 ## Status
 
-Phase 0 (foundation) in progress.
+Phase 0 (data, leagues, scoring) done. Phase 1 (projections, start/sit API, MCP server) in progress.
