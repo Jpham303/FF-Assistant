@@ -18,6 +18,9 @@ dependencies = [
     "alembic>=1.13",
     "dagster>=1.8",
     "dagster-webserver>=1.8",
+    "statsmodels>=0.15.0",
+    "scipy>=1.18.1",
+    "numpy>=2.5.4",
 ]
 
 [project.scripts]

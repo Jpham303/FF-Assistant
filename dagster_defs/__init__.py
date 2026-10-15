@@ -3,6 +3,8 @@
 No `from __future__ import annotations` here: Dagster inspects the real type of `context`.
 """
 
+from pathlib import Path
+
 import polars as pl
 from dagster import (
     AssetExecutionContext,
@@ -24,6 +26,7 @@ from ffa.features.games import load_pbp as load_game_pbp
 from ffa.ingest import ids, nflverse
 from ffa.leagues import sync
 from ffa.leagues.sleeper import SleeperAdapter
+from ffa.model import team as team_model
 from ffa.warehouse import duck, store
 
 FIRST_SEASON = 2015
@@ -226,8 +229,38 @@ def nightly_features(context: ScheduleEvaluationContext):
     return RunRequest(partition_key=CURRENT, run_key=f"features-{context.scheduled_execution_time}")
 
 
+# ---------------------------------------------------------------- models
+
+
+@asset(group_name="models", deps=["team_games"])
+def team_volume_model(context: AssetExecutionContext) -> MaterializeResult:
+    """Fit the team volume model (plays, pass rate, TDs, FG tries) and save its parameters."""
+    tg = duck.connect(settings.warehouse_dir).sql("select * from team_games").pl()
+    m = team_model.fit(
+        tg.with_columns(pl.col("fg_att").fill_null(0)),
+        team_model.TRAIN_SEASONS,
+        team_model.VALID_SEASONS,
+        team_model.DEFAULT_DECAY,
+        {n: team_model.DEFAULT_K for n in team_model.TENDENCIES},
+    )
+    m.save(Path(settings.models_dir) / "team_volume.json")
+    return MaterializeResult(
+        metadata={
+            f"{t}_gain_vs_lines_only": round(1 - v["valid_loss"] / v["lines_only_loss"], 4)
+            for t, v in m.metrics.items()
+        }
+    )
+
+
 defs = Definitions(
-    assets=[*ingest_assets, player_ids, sleeper_league, team_games, player_games],
+    assets=[
+        *ingest_assets,
+        player_ids,
+        sleeper_league,
+        team_games,
+        player_games,
+        team_volume_model,
+    ],
     jobs=[nflverse_job, injuries_job, dims_job, leagues_job, features_job],
     schedules=[
         nightly_current_season,

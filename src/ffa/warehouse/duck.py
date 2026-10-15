@@ -23,7 +23,8 @@ def connect(root: str | Path, database: str = ":memory:") -> duckdb.DuckDBPyConn
             f"CREATE OR REPLACE VIEW {dim.stem} AS SELECT * FROM read_parquet('{dim.as_posix()}')"
         )
     for ds_dir in dirs:
-        if ds_dir.name == "dims":
+        # Only dataset folders become views; anything without Parquet files is skipped.
+        if ds_dir.name == "dims" or next(ds_dir.rglob("*.parquet"), None) is None:
             continue
         name = ds_dir.name
         glob = (ds_dir / "**" / "*.parquet").as_posix()

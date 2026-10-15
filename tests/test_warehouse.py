@@ -52,3 +52,11 @@ def test_volatile_dataset_keeps_snapshots_and_supports_as_of(tmp_path):
 def test_rows_without_week_are_skipped(tmp_path):
     df = pl.DataFrame({"season": [2026, 2026], "week": [1, None], "x": [1, 2]})
     assert len(store.write(df, tmp_path, "rosters")) == 1
+
+
+def test_folders_without_parquet_are_ignored(tmp_path):
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "team_volume.json").write_text("{}")
+    store.write(pl.DataFrame({"season": [2026], "week": [1], "x": [1]}), tmp_path, "player_stats")
+    con = duck.connect(tmp_path)
+    assert con.sql("select count(*) from player_stats").fetchone()[0] == 1
