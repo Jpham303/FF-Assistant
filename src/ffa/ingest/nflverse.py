@@ -1,7 +1,10 @@
 """Loaders for nflverse release data.
 
-Each dataset is published as one Parquet file per season (schedules: one file for all
-seasons). Loaders return polars DataFrames; writing to the warehouse is a separate step.
+Each dataset is published as one file per season (schedules: one file for all seasons).
+Loaders return polars DataFrames; writing to the warehouse is a separate step.
+
+Includes ffopportunity (ffverse), whose expected stats per player-week are the
+"opportunity-only" baseline the projection model has to beat.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ import httpx
 import polars as pl
 
 RELEASES = "https://github.com/nflverse/nflverse-data/releases/download"
+FFOPPORTUNITY = "https://github.com/ffverse/ffopportunity/releases/download/latest-data"
 
 
 @dataclass(frozen=True)
@@ -23,6 +27,7 @@ class Dataset:
     # Volatile data changes during a week (injury reports, depth charts), so every fetch is
     # kept as a timestamped snapshot instead of overwriting. That keeps the backtest honest.
     volatile: bool = False
+    fmt: str = "parquet"  # or "csv"
 
 
 DATASETS: dict[str, Dataset] = {
@@ -39,8 +44,12 @@ DATASETS: dict[str, Dataset] = {
             f"{RELEASES}/weekly_rosters/roster_weekly_{{season}}.parquet",
             volatile=True,
         ),
+        Dataset("expected_points", f"{FFOPPORTUNITY}/ep_weekly_{{season}}.csv", fmt="csv"),
     ]
 }
+
+# CSV columns that look numeric but are identifiers.
+_ID_COLUMNS = {"player_id": pl.Utf8, "game_id": pl.Utf8}
 
 
 class NotPublishedError(Exception):
@@ -58,7 +67,13 @@ def fetch(dataset: str, season: int | None = None, *, client: httpx.Client | Non
         if resp.status_code == 404:
             raise NotPublishedError(url)
         resp.raise_for_status()
-        df = pl.read_parquet(io.BytesIO(resp.content))
+        buf = io.BytesIO(resp.content)
+        if ds.fmt == "csv":
+            df = pl.read_csv(
+                buf, infer_schema_length=None, null_values=["NA", ""], schema_overrides=_ID_COLUMNS
+            )
+        else:
+            df = pl.read_parquet(buf)
     finally:
         if own:
             client.close()
