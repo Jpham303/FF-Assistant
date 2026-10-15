@@ -26,6 +26,7 @@ from ffa.features.games import load_pbp as load_game_pbp
 from ffa.ingest import ids, nflverse
 from ffa.leagues import sync
 from ffa.leagues.sleeper import SleeperAdapter
+from ffa.model import matchup as matchup_mod
 from ffa.model import player as player_model_mod
 from ffa.model import team as team_model
 from ffa.warehouse import duck, store
@@ -274,6 +275,27 @@ def player_model(context: AssetExecutionContext) -> MaterializeResult:
     )
 
 
+@asset(group_name="models", deps=["player_model"])
+def matchup_model(context: AssetExecutionContext) -> MaterializeResult:
+    """Fit matchup ratings (where defenses give up production vs expectation)."""
+    pg = (
+        duck.connect(settings.warehouse_dir)
+        .sql(f"select * from player_games where season <= {max(player_model_mod.VALID_SEASONS)}")
+        .pl()
+    )
+    pm = player_model_mod.PlayerModel.load(Path(settings.models_dir) / "player.json")
+    m = matchup_mod.fit(
+        matchup_mod.expectations(pm.estimates(pm.history(pg))), player_model_mod.VALID_SEASONS
+    )
+    m.save(Path(settings.models_dir) / "matchup.json")
+    return MaterializeResult(
+        metadata={
+            f"{n}_gain_vs_none": round(1 - v["valid_loss"] / v["no_matchup_loss"], 4)
+            for n, v in m.metrics.items()
+        }
+    )
+
+
 defs = Definitions(
     assets=[
         *ingest_assets,
@@ -283,6 +305,7 @@ defs = Definitions(
         player_games,
         team_volume_model,
         player_model,
+        matchup_model,
     ],
     jobs=[nflverse_job, injuries_job, dims_job, leagues_job, features_job],
     schedules=[
