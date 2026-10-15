@@ -87,19 +87,33 @@ scoring system works without retraining anything.
 from ffa.scoring import stat_lines, score, breakdown, from_sleeper
 
 rules = from_sleeper(league.scoring)  # platform settings -> canonical rules
-pts = score(stat_lines(player_stats, team_stats, schedules), rules)
+pts = score(stat_lines(player_stats, pbp, schedules), rules)
 why = breakdown(...)  # per-term points, for explanations
 ```
 
-- **Canonical stats** follow Sleeper's vocabulary (`rec`, `pass_yd`, `fgm_yds`, `pts_allow`…),
-  built from nflverse player and team stats. Defenses are scored from team stats and the
-  final score.
+- **Canonical stats** follow Sleeper's vocabulary (`rec`, `pass_yd`, `fgm_yds`, `pts_allow`…).
+  Players come from nflverse weekly stats; team defenses are built play by play, because
+  the platforms score things team totals blur together: special-teams vs defensive
+  fumbles, uncredited strip-sacks, blocked extra points, and points allowed that excludes
+  return touchdowns and safeties the defense was not on the field for.
 - **Rules** are linear terms, bands (points-allowed tiers, yardage bonuses) and
   position-specific terms (TE premium). Platform settings we can't compute are listed in
   `rules.unsupported` or `rules.approximate`, never silently dropped.
-- **Verified** against nflverse's own fantasy points on every player-week since 2015:
-  100% agreement, the only differences being fumbles lost on kick returns, which nflverse
-  omits and the platforms count (`tests/test_scoring_data.py`).
+
+### Verification
+
+| Check | Result |
+| --- | --- |
+| Our points vs **Sleeper's awarded points**, a real 12-team league, weeks 1–4 of 2026 | **683 / 683 player-weeks exact** |
+| Offense vs nflverse's own fantasy points, every player-week since 2015 | 204,077 / 204,077 (return fumbles aside, which nflverse omits) |
+| Play-by-play scoring events vs final scores, every game since 2015 | 6,184 / 6,184 team-games exact |
+
+Re-run the Sleeper comparison any week; it exits non-zero on any mismatch and prints our
+per-term breakdown for it:
+
+```bash
+uv run ffa check-scoring sleeper <league_id>
+```
 
 ## Develop
 

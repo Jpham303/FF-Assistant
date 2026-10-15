@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import polars as pl
 
-from ffa.ingest.ids import dst_key
+from ffa.scoring.defense import DST_STAT_NAMES, dst_stat_lines
 
 ID_COLS = ["key", "season", "week", "team", "opponent", "position"]
 
@@ -90,27 +90,7 @@ DERIVED: dict[str, pl.Expr] = {
     "rush_rec_yd": pl.col("rush_yd") + pl.col("rec_yd"),
 }
 
-# canonical name -> expression over nflverse team_stats columns (the defense's own row)
-DST_STATS: dict[str, pl.Expr] = {
-    "sack": _c("def_sacks"),
-    "sack_yd": _c("def_sack_yards"),
-    "int": _c("def_interceptions"),
-    "ff": _c("def_fumbles_forced"),
-    # Includes recoveries on special teams; nflverse does not separate them.
-    "fum_rec": _c("fumble_recovery_opp"),
-    "safe": _c("def_safeties"),
-    "def_td": _c("def_tds"),
-    "def_st_td": _c("special_teams_tds"),
-    "blk_kick": _c("def_fg_blocks") + _c("def_punt_blocks"),
-    "qb_hit": _c("def_qb_hits"),
-    "tkl_loss": _c("def_tackles_for_loss"),
-    "def_pass_def": _c("def_pass_defended"),
-    "def_kr_yd": _c("kickoff_return_yards"),
-    "def_pr_yd": _c("punt_return_yards"),
-}
-
 PLAYER_STAT_NAMES = [*PLAYER_STATS, *DERIVED]
-DST_STAT_NAMES = [*DST_STATS, "pts_allow", "yds_allow"]
 
 
 def player_stat_lines(raw: pl.DataFrame) -> pl.DataFrame:
@@ -130,60 +110,9 @@ def player_stat_lines(raw: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def dst_stat_lines(team_stats: pl.DataFrame, schedules: pl.DataFrame) -> pl.DataFrame:
-    """nflverse team_stats + schedules -> canonical defense-week stat lines.
-
-    pts_allow is every point the opponent scored, including return touchdowns.
-    yds_allow is the opponent's net offensive yards (sack yardage subtracted).
-    """
-    own = team_stats.select(
-        pl.col("team"),
-        pl.col("season").cast(pl.Int32),
-        pl.col("week").cast(pl.Int32),
-        pl.col("opponent_team").alias("opponent"),
-        *[expr.alias(name) for name, expr in DST_STATS.items()],
-    )
-    opp_yards = team_stats.select(
-        pl.col("team").alias("opponent"),
-        pl.col("season").cast(pl.Int32),
-        pl.col("week").cast(pl.Int32),
-        (_c("passing_yards") - _c("sack_yards_lost") + _c("rushing_yards")).alias("yds_allow"),
-    )
-    games = schedules.select(
-        pl.col("season").cast(pl.Int32),
-        pl.col("week").cast(pl.Int32),
-        "home_team",
-        "away_team",
-        "home_score",
-        "away_score",
-    ).filter(pl.col("home_score").is_not_null())
-    allowed = pl.concat(
-        [
-            games.select(
-                "season", "week", pl.col("home_team").alias("team"),
-                pl.col("away_score").cast(pl.Float64).alias("pts_allow"),
-            ),
-            games.select(
-                "season", "week", pl.col("away_team").alias("team"),
-                pl.col("home_score").cast(pl.Float64).alias("pts_allow"),
-            ),
-        ]
-    )  # fmt: skip
-    return (
-        own.join(allowed, on=["season", "week", "team"], how="inner")
-        .join(opp_yards, on=["season", "week", "opponent"], how="left")
-        .with_columns(
-            pl.col("team").map_elements(dst_key, return_dtype=pl.Utf8).alias("key"),
-            pl.lit("DEF").alias("position"),
-            pl.col("yds_allow").fill_null(0),
-        )
-        .select(*ID_COLS, *DST_STAT_NAMES)
-    )
-
-
-def stat_lines(player_stats: pl.DataFrame, team_stats: pl.DataFrame, schedules: pl.DataFrame):
+def stat_lines(player_stats: pl.DataFrame, pbp: pl.DataFrame, schedules: pl.DataFrame):
     """All scoreable rows (players and defenses) in one frame; missing stats are 0."""
     return pl.concat(
-        [player_stat_lines(player_stats), dst_stat_lines(team_stats, schedules)],
+        [player_stat_lines(player_stats), dst_stat_lines(pbp, schedules)],
         how="diagonal_relaxed",
     ).with_columns(pl.col(PLAYER_STAT_NAMES + DST_STAT_NAMES).fill_null(0))

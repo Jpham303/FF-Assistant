@@ -1,6 +1,6 @@
 {"sack": 1.0, "qb_hit": 0.0, "fgm_40_49": 0.0, "bonus_rec_te": 0.0, "fgm_yds": 0.1, "def_forced_punts": 0.0,
  "bonus_rec_yd_100": 0.0, "bonus_rush_yd_100": 0.0, "pass_int": -1.0, "fgmiss_50p": 0.0, "pts_allow_0": 10.0,
- "bonus_pass_yd_400": 0.0, "pass_2pt": 2.0, "rec_0_4": 0.0, "yds_allow_450_499": 0.0, "blk_kick_ret_yd": 0.0,
+ "bonus_pass_yd_400": 0.0, "pass_2pt": 2.0, "rec_2pt": 2.0, "rec_0_4": 0.0, "yds_allow_450_499": 0.0, "blk_kick_ret_yd": 0.0,
  "st_td": 6.0, "def_pr_yd": 0.0, "rec_30_39": 0.0, "sack_yd": 0.0, "fgm_yds_over_30": 0.0, "rec_td": 6.0,
  "yds_allow_400_449": 0.0, "tkl_ast": 0.0, "rec_20_29": 0.0, "fgm_30_39": 0.0, "fgm_50_59": 0.0, "xpmiss": -1.0,
  "rush_td_50p": 0.0, "rush_td": 6.0, "def_kr_yd": 0.0, "bonus_fd_wr": 0.0, "pts_allow": 0.0, "def_4_and_stop": 0.0,

@@ -13,16 +13,13 @@ from ffa.scoring import (
     score,
     stat_lines,
 )
-from ffa.scoring.stats import DST_STATS, PLAYER_STATS
+from ffa.scoring.defense import scoring_plays
+from ffa.scoring.stats import PLAYER_STATS
 
 FIX = Path(__file__).parent / "fixtures" / "scoring"
 LEAGUE_RULES = from_sleeper(json.loads((FIX / "sleeper_scoring.json").read_text()))
 
 PLAYER_COLS = sorted({c for e in PLAYER_STATS.values() for c in e.meta.root_names()})
-TEAM_COLS = sorted(
-    {c for e in DST_STATS.values() for c in e.meta.root_names()}
-    | {"passing_yards", "sack_yards_lost", "rushing_yards"}
-)
 
 
 def raw_player(**stats) -> dict:
@@ -50,7 +47,8 @@ def test_league_rules_translated():
     assert r.linear["fgm_yds"] == 0.1 and r.linear["fgmiss"] == -1
     assert "fgm" not in r.linear  # zero-valued settings are dropped
     assert len([b for b in r.bands if b.stat == "pts_allow"]) == 6  # 21-27 is worth 0
-    assert set(r.approximate) == {"def_st_fum_rec", "def_st_ff"}
+    assert r.linear["def_st_fum_rec"] == 1 and r.linear["def_st_ff"] == 1
+    assert r.approximate == {}
     assert set(r.unsupported) == {"st_fum_rec", "st_ff"}
 
 
@@ -119,51 +117,96 @@ def test_kicker_points_per_made_yard_and_misses():
     assert points(df) == [pytest.approx(7.4 - 2 + 3 - 1)]
 
 
-# ---------------------------------------------------------------- defense
+# ---------------------------------------------------------------- defense (play-by-play)
+
+PBP_DEFAULTS = {
+    "season": 2026, "week": 1, "home_team": "CIN", "away_team": "TB", "game_id": "G1",
+    "posteam": None, "defteam": None, "play_type": "pass", "sack": 0, "interception": 0,
+    "fumble_forced": 0, "fumble_lost": 0, "forced_fumble_player_1_team": None,
+    "fumble_recovery_1_team": None, "safety": 0, "touchdown": 0, "return_touchdown": 0,
+    "td_team": None, "punt_blocked": 0, "field_goal_result": None,
+    "extra_point_result": None, "two_point_conv_result": None,
+    "defensive_two_point_conv": 0, "two_point_attempt": 0, "qb_hit": 0,
+    "tackled_for_loss": 0, "pass_defense_1_player_id": None, "return_yards": 0,
+    "yards_gained": 0, "posteam_score": 0, "posteam_score_post": 0,
+}  # fmt: skip
 
 
-def _team_rows() -> pl.DataFrame:
-    def row(team, opp, **kw):
-        base = {c: 0 for c in TEAM_COLS}
-        return {"season": 2026, "week": 1, "team": team, "opponent_team": opp} | base | kw
+def game() -> pl.DataFrame:
+    """CIN (home) 14, TB 11. Each play is a case the platforms score in a specific way."""
+    plays = [
+        # Strip-sack with no player credited for the forced fumble: still a sack.
+        dict(posteam="TB", defteam="CIN", sack=1, yards_gained=-8, fumble_lost=1,
+             fumble_recovery_1_team="CIN"),
+        # Pick-six by CIN, then CIN's extra point: neither counts against TB's defense.
+        dict(posteam="TB", defteam="CIN", interception=1, return_touchdown=1, touchdown=1,
+             td_team="CIN"),
+        dict(posteam="CIN", defteam="TB", play_type="extra_point", extra_point_result="good"),
+        # TB punts; CIN muffs; TB recovers: special-teams recovery and forced fumble.
+        dict(posteam="TB", defteam="CIN", play_type="punt", fumble_forced=1, fumble_lost=1,
+             forced_fumble_player_1_team="TB", fumble_recovery_1_team="TB"),
+        dict(posteam="TB", defteam="CIN", play_type="field_goal", field_goal_result="made"),
+        dict(posteam="CIN", defteam="TB", touchdown=1, td_team="CIN", yards_gained=40),
+        dict(posteam="CIN", defteam="TB", play_type="extra_point", extra_point_result="good"),
+        # TB kickoff-return TD (TB is posteam on a kickoff it receives); CIN blocks the PAT.
+        dict(posteam="TB", defteam="CIN", play_type="kickoff", touchdown=1,
+             return_touchdown=1, td_team="TB", return_yards=100),
+        dict(posteam="TB", defteam="CIN", play_type="extra_point", extra_point_result="blocked"),
+        # TB punts, CIN's returner is tackled in his end zone: the kicking team scores.
+        dict(posteam="TB", defteam="CIN", play_type="punt", safety=1, posteam_score=9,
+             posteam_score_post=11),
+    ]  # fmt: skip
+    rows = [PBP_DEFAULTS | {"play_id": float(i)} | p for i, p in enumerate(plays, 1)]
+    return pl.DataFrame(rows, infer_schema_length=None)
 
+
+def schedule() -> pl.DataFrame:
     return pl.DataFrame(
-        [
-            row("CIN", "TB", def_sacks=4, def_interceptions=1, fumble_recovery_opp=1,
-                passing_yards=250, sack_yards_lost=12, rushing_yards=100),
-            row("TB", "CIN", def_sacks=1, def_tds=1, passing_yards=200, sack_yards_lost=30,
-                rushing_yards=80),
-            row("LA", "SEA", def_safeties=1),
-            row("SEA", "LA"),
-        ]
+        {"game_id": ["G1"], "season": [2026], "week": [1], "home_team": ["CIN"],
+         "away_team": ["TB"], "home_score": [14], "away_score": [11]}
     )  # fmt: skip
 
 
-def _schedule() -> pl.DataFrame:
-    return pl.DataFrame(
-        {
-            "season": [2026, 2026], "week": [1, 1],
-            "home_team": ["CIN", "SEA"], "away_team": ["TB", "LA"],
-            "home_score": [27, 0], "away_score": [13, 35],
-        }
-    )  # fmt: skip
+def defense() -> dict[str, dict]:
+    return {r["key"]: r for r in dst_stat_lines(game(), schedule()).iter_rows(named=True)}
 
 
-def test_defense_stat_lines():
-    d = {r["key"]: r for r in dst_stat_lines(_team_rows(), _schedule()).iter_rows(named=True)}
-    assert set(d) == {"DST_CIN", "DST_TB", "DST_LA", "DST_SEA"}
-    assert d["DST_CIN"]["pts_allow"] == 13 and d["DST_TB"]["pts_allow"] == 27
-    assert d["DST_CIN"]["yds_allow"] == 200 - 30 + 80  # TB's net offensive yards
-    assert d["DST_LA"]["pts_allow"] == 0 and d["DST_SEA"]["pts_allow"] == 35
+def test_scoring_events_add_up_to_the_final_score():
+    totals = dict(scoring_plays(game()).group_by("scorer").agg(pl.col("points").sum()).iter_rows())
+    assert totals == {"CIN": 14, "TB": 11}
+
+
+def test_defense_counting_stats():
+    cin, tb = defense()["DST_CIN"], defense()["DST_TB"]
+    assert (cin["sack"], cin["sack_yd"], cin["int"], cin["ff"]) == (1, 8, 1, 0)
+    assert (cin["fum_rec"], cin["def_td"], cin["blk_kick"]) == (1, 1, 1)
+    assert (tb["def_st_fum_rec"], tb["def_st_ff"], tb["fum_rec"]) == (1, 1, 0)
+    assert (tb["def_st_td"], tb["safe"], cin["safe"]) == (1, 1, 0)
+    assert tb["def_kr_yd"] == 100 and tb["yds_allow"] == 40
+
+
+def test_points_allowed_excludes_return_scores():
+    d = defense()
+    # TB scored 11, but 6 came on a kick return and 2 on a safety, neither against CIN's D.
+    assert d["DST_CIN"]["pts_allow"] == 3
+    # CIN scored 14; the pick-six and its extra point were not allowed by TB's defense.
+    assert d["DST_TB"]["pts_allow"] == 7
 
 
 def test_defense_points():
-    lines = dst_stat_lines(_team_rows(), _schedule())
+    lines = dst_stat_lines(game(), schedule())
     got = dict(zip(lines["key"], points(lines), strict=True))
-    assert got["DST_CIN"] == 4 + 2 + 2 + 4  # sacks, INT, fumble recovery, 7-13 allowed
-    assert got["DST_TB"] == 1 + 6 + 0  # 21-27 allowed is worth 0 in this league
-    assert got["DST_LA"] == 2 + 10  # safety + shutout
-    assert got["DST_SEA"] == -4
+    assert got["DST_CIN"] == 1 + 2 + 2 + 6 + 2 + 7  # sack, INT, rec, TD, block, 1-6 allowed
+    assert got["DST_TB"] == 1 + 1 + 6 + 2 + 4  # ST rec, ST FF, return TD, safety, 7-13
+
+
+def test_relocated_team_codes_are_normalized():
+    old = game().with_columns(
+        pl.col(c).replace({"TB": "STL"}) for c in ("away_team", "posteam", "defteam", "td_team")
+    )
+    sched = schedule().with_columns(pl.lit("STL").alias("away_team"))
+    keys = set(dst_stat_lines(old, sched)["key"])
+    assert keys == {"DST_CIN", "DST_LA"}
 
 
 @pytest.mark.parametrize(
@@ -179,9 +222,7 @@ def test_points_allowed_band_edges(allowed, pts):
 def test_offensive_players_never_get_defense_bands():
     """A receiver's pts_allow is 0; he must not receive the shutout bonus."""
     lines = stat_lines(
-        pl.DataFrame([raw_player(receptions=1)], infer_schema_length=None),
-        _team_rows(),
-        _schedule(),
+        pl.DataFrame([raw_player(receptions=1)], infer_schema_length=None), game(), schedule()
     )
     wr = score(lines, LEAGUE_RULES).filter(pl.col("key") == "G-1")
     assert wr["fpts"].to_list() == [0.5]
@@ -195,8 +236,8 @@ def test_breakdown_sums_to_score():
                         fg_made_list="45", pat_made=2)],
             infer_schema_length=None,
         ),
-        _team_rows(),
-        _schedule(),
+        game(),
+        schedule(),
     )  # fmt: skip
     totals = score(lines, LEAGUE_RULES).select("key", "fpts")
     parts = breakdown(lines, LEAGUE_RULES).group_by("key").agg(pl.col("points").sum())

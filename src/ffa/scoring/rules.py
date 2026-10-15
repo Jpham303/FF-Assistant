@@ -128,10 +128,7 @@ _SLEEPER_UNSUPPORTED = {
     "st_ff": "forced fumbles by offensive players on special teams are not tracked (rare)",
     "st_fum_rec": "fumble recoveries by offensive players on special teams are not tracked (rare)",
 }  # fmt: skip
-_SLEEPER_APPROXIMATE = {
-    "def_st_fum_rec": "special-teams recoveries are scored at the fum_rec value",
-    "def_st_ff": "special-teams forced fumbles are scored at the ff value",
-}
+_SLEEPER_APPROXIMATE: dict[str, str] = {}
 
 
 def from_sleeper(settings: dict[str, float]) -> ScoringRules:
