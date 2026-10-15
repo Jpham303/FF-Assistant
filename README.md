@@ -85,9 +85,10 @@ scoring system works without retraining anything.
 
 ```python
 from ffa.scoring import stat_lines, score, breakdown, from_sleeper
-rules = from_sleeper(league.scoring)        # platform settings -> canonical rules
+
+rules = from_sleeper(league.scoring)  # platform settings -> canonical rules
 pts = score(stat_lines(player_stats, team_stats, schedules), rules)
-why = breakdown(...)                         # per-term points, for explanations
+why = breakdown(...)  # per-term points, for explanations
 ```
 
 - **Canonical stats** follow Sleeper's vocabulary (`rec`, `pass_yd`, `fgm_yds`, `pts_allow`…),
