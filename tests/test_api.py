@@ -165,6 +165,11 @@ def test_drivers_carry_numbers_and_size_matchups():
     assert d[1].startswith("Expected share of designed runs: 50.0%")  # rushing role first
     m = [x for x in d if x.startswith("Matchup")]
     assert m and "8% fewer yards per carry against JAX" in m[0]
+    assert d[0].startswith("DAL is a 1.5-point underdog vs JAX (total 50.0), implied to score")
+    dog = startsit.drivers(row, team | {"spread_for": 3.5}, "RB")[0]
+    assert "favored by 3.5" in dog
+    dog = startsit.drivers(row, team | {"spread_for": -3.5}, "RB")[0]
+    assert "a 3.5-point underdog" in dog
     assert "small factor" in m[0]
 
 

@@ -165,10 +165,14 @@ def drivers(row: dict, team: dict | None, position: str) -> list[str]:
     """Plain-language reasons, each with the number it rests on."""
     out = []
     if team:
+        # spread_for is the team's expected margin (positive = favored). Written out in
+        # words: a signed "spread" reads the opposite way to bettors (-3.5 = favored).
+        m = team["spread_for"]
+        line = (f"favored by {m:.1f}" if m > 0 else f"a {-m:.1f}-point underdog" if m < 0
+                else "a pick'em")  # fmt: skip
         out.append(
-            f"{row['team']} is implied to score {team['implied']:.1f} points vs "
-            f"{team['opponent']} (spread {team['spread_for']:+.1f}, "
-            f"total {team['total_line']:.1f}); "
+            f"{row['team']} is {line} vs {team['opponent']} (total {team['total_line']:.1f}), "
+            f"implied to score {team['implied']:.1f} points; "
             f"projected {team['mu_plays']:.0f} plays, {team['p_pass'] * 100:.0f}% passes"
         )
     status = row.get("injury_status")
