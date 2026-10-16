@@ -18,8 +18,15 @@ config.set_main_option("sqlalchemy.url", url)
 target_metadata = Base.metadata
 
 
+# Dagster keeps its own schema version in `alembic_version` in the same database, so the
+# app's migrations must record theirs elsewhere or each reads the other's version.
+VERSION_TABLE = "ffa_alembic_version"
+
+
 def run_migrations_offline() -> None:
-    context.configure(url=url, target_metadata=target_metadata, literal_binds=True)
+    context.configure(
+        url=url, target_metadata=target_metadata, version_table=VERSION_TABLE, literal_binds=True
+    )
     with context.begin_transaction():
         context.run_migrations()
 
@@ -32,11 +39,15 @@ def run_migrations_online() -> None:
     )
     if hasattr(connectable, "connect"):
         with connectable.connect() as connection:
-            context.configure(connection=connection, target_metadata=target_metadata)
+            context.configure(
+                connection=connection, target_metadata=target_metadata, version_table=VERSION_TABLE
+            )
             with context.begin_transaction():
                 context.run_migrations()
     else:
-        context.configure(connection=connectable, target_metadata=target_metadata)
+        context.configure(
+            connection=connectable, target_metadata=target_metadata, version_table=VERSION_TABLE
+        )
         with context.begin_transaction():
             context.run_migrations()
 

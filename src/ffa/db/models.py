@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import JSON, DateTime, Double, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -49,7 +49,7 @@ class TeamRow(Base):
     wins: Mapped[int] = mapped_column(Integer, default=0)
     losses: Mapped[int] = mapped_column(Integer, default=0)
     ties: Mapped[int] = mapped_column(Integer, default=0)
-    points_for: Mapped[float] = mapped_column(default=0.0)
+    points_for: Mapped[float] = mapped_column(Double, default=0.0)
     empty_lineup_slots: Mapped[list[str]] = mapped_column(JSON, default=list)
 
     league: Mapped[LeagueRow] = relationship(back_populates="teams")

@@ -193,5 +193,6 @@ def test_migrations_match_models(tmp_path):
     cfg.cmd_opts = type("o", (), {"x": [f"url={url}"]})()
     command.upgrade(cfg, "head")
     with create_engine(url).connect() as conn:
-        diff = compare_metadata(MigrationContext.configure(conn), Base.metadata)
+        ctx = MigrationContext.configure(conn, opts={"version_table": "ffa_alembic_version"})
+        diff = compare_metadata(ctx, Base.metadata)
     assert diff == []
