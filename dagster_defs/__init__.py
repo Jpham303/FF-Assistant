@@ -91,7 +91,54 @@ def hourly_injuries(context: ScheduleEvaluationContext):
     return RunRequest(partition_key=CURRENT, run_key=f"hourly-{context.scheduled_execution_time}")
 
 
-@asset(group_name="dims", deps=["rosters"])
+@asset(group_name="status")
+def sleeper_players(context: AssetExecutionContext) -> MaterializeResult:
+    """Sleeper's player DB, fetched once a day (Sleeper asks for no more): IDs and names
+    for the crosswalk, and each player's current game status and practice participation,
+    a fresher second source than nflverse's injury file."""
+    from datetime import UTC, datetime
+
+    from ffa.ingest import status as status_src
+    from ffa.service.projections import upcoming_week
+
+    now = datetime.now(UTC)
+    players = ids.load_sleeper_players()
+    store.write_dim(players, settings.warehouse_dir, "sleeper_players")
+    con = duck.connect(settings.warehouse_dir)
+    week = upcoming_week(con, settings.current_season)
+    meta = {"players": players.height, "fetched_at": now.isoformat()}
+    if week is not None:
+        try:
+            xw = con.sql("select sleeper_id, gsis_id from player_ids").pl()
+        except Exception:
+            xw = pl.DataFrame(schema={"sleeper_id": pl.Utf8, "gsis_id": pl.Utf8})
+        st = status_src.sleeper_status(players, xw, now).with_columns(
+            pl.lit(settings.current_season).cast(pl.Int32).alias("season"),
+            pl.lit(week).cast(pl.Int32).alias("week"),
+        )
+        store.write(st, settings.warehouse_dir, "sleeper_status", volatile=True, ingested_at=now)
+        meta |= {"week": week, "with_status": st.height,
+                 "out": int((st["status"] == "Out").sum())}  # fmt: skip
+    return MaterializeResult(metadata=meta)
+
+
+status_job = define_asset_job(
+    "status_refresh", selection=AssetSelection.assets("sleeper_players", "weekly_projections")
+)
+
+
+# Once a day: after practice reports on weekdays; Sunday after inactives for the noon games.
+@schedule(job=status_job, cron_schedule="5 17 * * 1-6", execution_timezone="America/Chicago")
+def daily_status(context: ScheduleEvaluationContext):
+    return RunRequest(run_key=f"status-{context.scheduled_execution_time}")
+
+
+@schedule(job=status_job, cron_schedule="45 10 * * 0", execution_timezone="America/Chicago")
+def sunday_status(context: ScheduleEvaluationContext):
+    return RunRequest(run_key=f"status-{context.scheduled_execution_time}")
+
+
+@asset(group_name="dims", deps=["rosters", "sleeper_players"])
 def player_ids(context: AssetExecutionContext) -> MaterializeResult:
     """Crosswalk from nflverse gsis_id to Sleeper and Yahoo IDs, with source and conflicts."""
     rosters = (
@@ -99,17 +146,16 @@ def player_ids(context: AssetExecutionContext) -> MaterializeResult:
         .sql("select gsis_id, sleeper_id, yahoo_id, season, week from rosters")
         .pl()
     )
+    # The Sleeper DB is fetched once a day by `sleeper_players` (Sleeper's request); reuse it.
     try:
-        sleeper = ids.load_sleeper_players()
-    except Exception as exc:  # the other sources still produce a usable crosswalk
-        context.log.warning(f"Sleeper player DB unavailable, continuing without it: {exc}")
+        sleeper = duck.connect(settings.warehouse_dir).sql("select * from sleeper_players").pl()
+    except Exception:  # not fetched yet: the other sources still give a usable crosswalk
+        context.log.warning("Sleeper player DB not fetched yet; crosswalk built without it")
         sleeper = None
     xw = ids.build_crosswalk(
         ids.load_nflverse_players(), rosters, ids.load_dynastyprocess(), sleeper
     )
     store.write_dim(xw, settings.warehouse_dir, "player_ids")
-    if sleeper is not None:  # names for Sleeper IDs the crosswalk doesn't know yet
-        store.write_dim(sleeper, settings.warehouse_dir, "sleeper_players")
 
     active = xw.filter(
         pl.col("position").is_in(ids.FANTASY_POSITIONS)
@@ -392,6 +438,7 @@ def hourly_projections(context: ScheduleEvaluationContext):
 defs = Definitions(
     assets=[
         *ingest_assets,
+        sleeper_players,
         player_ids,
         sleeper_league,
         team_games,
@@ -402,7 +449,15 @@ defs = Definitions(
         sim_params,
         weekly_projections,
     ],
-    jobs=[nflverse_job, injuries_job, dims_job, leagues_job, features_job, projections_job],
+    jobs=[
+        nflverse_job,
+        injuries_job,
+        dims_job,
+        leagues_job,
+        features_job,
+        projections_job,
+        status_job,
+    ],
     schedules=[
         nightly_current_season,
         hourly_injuries,
@@ -410,5 +465,7 @@ defs = Definitions(
         hourly_leagues,
         nightly_features,
         hourly_projections,
+        daily_status,
+        sunday_status,
     ],
 )

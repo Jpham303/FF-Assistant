@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     warehouse_dir: str = "./data/warehouse"
     models_dir: str = "./data/models"  # fitted model parameters (JSON)
     current_season: int = 2026
+    timezone: str = "America/Chicago"  # for times shown in explanations
 
     sleeper_username: str = ""
     sleeper_league_id: str = ""

@@ -73,8 +73,18 @@ class WeekInfo(BaseModel):
     projections_generated_at: datetime | None = Field(
         None, description="When this week's simulations were run (UTC)"
     )
-    injuries_as_of: datetime | None = Field(
-        None, description="When the injury report used was fetched from nflverse (UTC)"
+    nflverse_injuries_fetched_at: datetime | None = Field(
+        None,
+        description="When we last downloaded nflverse's injury file (not how current "
+        "the file is: nflverse publishes no update time and lags official reports)",
+    )
+    sleeper_status_fetched_at: datetime | None = Field(
+        None, description="When Sleeper's player statuses were last fetched (once a day)"
+    )
+    injury_caveat: str = (
+        "Game statuses come from nflverse's injury file and Sleeper's player DB (fetched once "
+        "a day: ~5 PM CT, Sunday ~10:45 AM CT). Late scratches and inactives announced after "
+        "the last fetch are not reflected; confirm game-day status before lineups lock."
     )
     sources: list[str] = Field(default_factory=list)
 
@@ -110,6 +120,9 @@ class Player(BaseModel):
     p90: float
     play_probability: float
     injury_status: str | None
+    injury_source: str | None = Field(None, description="Where the injury information came from")
+    injury_updated_at: str | None = Field(None, description="When that source last updated it")
+    injury_fetched_at: str | None = Field(None, description="When we fetched it")
     expected_stats: dict[str, float]
     points_by_rule: dict[str, float] = Field(description="Expected points from each scoring rule")
     drivers: list[str] = Field(description="Plain-language reasons, each with its number")
@@ -159,7 +172,8 @@ class MyTeam(BaseModel):
     lineup: list[LineupSlot]
     bench: list[Player]
     not_playing: list[str] = Field(
-        description="Rostered players with no projection (bye, unmatched)"
+        description="Rostered players who won't play: byes/unmatched, and players ruled out "
+        "(with the injury source and time)"
     )
 
 
@@ -220,7 +234,8 @@ def week_info(con=Depends(get_con)) -> WeekInfo:
 
     info.projections_generated_at = latest("projection_sims")
     info.projections_available = info.projections_generated_at is not None
-    info.injuries_as_of = latest("injuries")
+    info.nflverse_injuries_fetched_at = latest("injuries")
+    info.sleeper_status_fetched_at = latest("sleeper_status")
     return info
 
 
@@ -304,11 +319,20 @@ def my_team(league: str, week: int | None = None, con=Depends(get_con),
     views = startsit.player_views(data, rules)
     lineup = startsit.best_lineup(views, row.lineup_slots)
     starters = {s["key"] for s in lineup}
-    bench = sorted((v for k, v in views.items() if k not in starters), key=lambda v: -v.mean)
+    bench = sorted(
+        (v for k, v in views.items()
+         if k not in starters and v.play_probability >= startsit.OUT_THRESHOLD),
+        key=lambda v: -v.mean,
+    )  # fmt: skip
     names = {e.player_key: e.name or e.platform_player_id for e in entries}
+    byes = [f"{names.get(k) or k} (bye or not on an active roster)" for k in set(keys) - set(views)]
+    ruled_out = [
+        f"{v.name} ({next((d for d in v.drivers if d.startswith('Injury')), 'ruled out')})"
+        for v in views.values() if v.play_probability < startsit.OUT_THRESHOLD
+    ]  # fmt: skip
     return MyTeam(
         league=row.id, team=team.name, season=season, week=w, scoring=label,
         lineup=[LineupSlot(**s) for s in lineup],
         bench=[Player(**startsit.as_dict(v)) for v in bench],
-        not_playing=sorted(names.get(k) or k for k in set(keys) - set(views)),
+        not_playing=sorted(byes + ruled_out),
     )  # fmt: skip

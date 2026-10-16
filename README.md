@@ -142,6 +142,28 @@ times from data available before kickoff:
 | Start/sit, close calls | **58.9%** | 53.6% | 56.0% |
 | Projection error | lowest at every position | | |
 
+## Injuries and game status
+
+Availability is the input that matters most on a given Sunday, and the slowest to arrive:
+teams give game designations (Out, Doubtful, Questionable) only with the final injury
+report, usually Friday.
+
+- **Two sources.** nflverse's injury file (hourly) and Sleeper's player DB (once a day, as
+  Sleeper requests: `daily_status` at 5:05 PM CT, `sunday_status` at 10:45 AM CT after
+  inactives for the noon games; each rebuilds projections right after). The more severe
+  designation wins: a missed ruling costs far more than a cautious one.
+- **Before the final report**, a player with no designation who missed or was limited in
+  practice is not assumed healthy. His chance to play comes from history: every report row
+  with that practice level, split by role and whether he was Out the week before (a starter
+  who was Out and hasn't practiced played about 1% of the time). Rest days don't count.
+  Whether a team's final report is in is judged from the data (final reports designate
+  someone; 99.7% of team-weeks since 2015), not the clock, because feeds lag.
+- **Every injured player carries his source and time**, e.g. "Injury: OUT (hamstring), did
+  not practice [Sleeper, updated Fri Oct 16 4:12 PM CDT; fetched 5:05 PM CDT]". Ruled-out
+  players are never recommended and never put in a lineup.
+- **Limit:** inactives announced after the last fetch (late games, Sunday-morning
+  scratches) are not reflected. `/week` says when each source was last fetched.
+
 ## API
 
 The weekly projections job (`weekly_projections`, hourly at :25 after the injury snapshot)
@@ -150,7 +172,7 @@ is applied at request time. Interactive docs at http://localhost:8000/docs.
 
 | Endpoint | What it returns |
 | --- | --- |
-| `GET /week` | current season, upcoming week, when projections ran, when the injury report was fetched, data sources |
+| `GET /week` | current season, upcoming week, when projections ran, when each injury source was last fetched, data sources |
 | `GET /players/search?q=` | player keys by name, typos allowed; `match` (1.0 = exact) and `projected` (false on a bye). A bye-week player is reported as not playing, never swapped for a similar name |
 | `GET /projections?keys=` | mean, median, 10th–90th percentile, play probability, expected stats, points per scoring rule, and plain-language drivers each carrying its number |
 | `POST /start-sit` | 2–6 players: recommendation (key and name), P(each outscores each other) from simulations that share each game, close-call and injury notes |

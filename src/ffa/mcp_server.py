@@ -34,11 +34,16 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    status), efficiency. Matchup ratings are a SMALL factor (they moved accuracy by
    0.1-0.3% in testing); never make a matchup the main reason.
 4. Mention injury notes and uncertainty (10th-90th percentile range) when they matter.
-5. Name the data behind the answer: use `sources` and the timestamps from
-   current_week (when projections ran, when the injury report was fetched). The model
-   does not read news articles; if a decision hinges on late news (e.g. an inactive
-   announced after the last injury report), say the projection may not reflect it.
-6. If a player is not found or not playing this week, say so. Never substitute a
+5. Name the data behind the answer: `sources`, when projections ran, and for every injured
+   or questionable player the injury source and time that come with him ("Out - Sleeper,
+   updated Fri 4:12 PM"). The model does not read news. Game statuses come from nflverse
+   and from Sleeper, fetched once a day (~5 PM CT; Sunday ~10:45 AM CT), so a late scratch
+   or inactive after that is not reflected: say so, and tell the user to confirm game-day
+   status before lineups lock.
+6. A player with no game status yet but a missed or limited practice is a real risk
+   (statuses usually arrive with Friday's final report); report his play probability.
+   A player ruled out is never the recommendation; say clearly that he is out.
+7. If a player is not found or not playing this week, say so. Never substitute a
    similarly named player.
 """
 
@@ -119,7 +124,8 @@ def _resolve(players: list[str], week: int | None) -> tuple[list[str], list[dict
 @mcp.tool(annotations=READ_ONLY)
 def current_week() -> dict:
     """The upcoming NFL week, whether projections exist for it, when they were generated,
-    when the injury report behind them was fetched, and the data sources to cite."""
+    when each injury source was last fetched (nflverse, Sleeper), a caveat about game-day
+    statuses, and the data sources to cite."""
     try:
         return _call("GET", "/week")
     except ApiError as e:

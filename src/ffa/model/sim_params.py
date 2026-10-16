@@ -24,6 +24,16 @@ import statsmodels.api as sm
 STARTER_SNAP_PCT = 0.30  # "role" threshold for availability
 
 
+PENDING_PRACTICE = frozenset({
+    "Did Not Participate In Practice", "Limited Participation in Practice",
+})  # fmt: skip
+
+
+def is_rest(reason: str | None) -> bool:
+    """Veterans' scheduled rest days appear as DNP; they say nothing about injury."""
+    return bool(reason) and "rest" in reason.lower()
+
+
 @dataclass
 class SimParams:
     p_play: dict[str, float] = field(default_factory=dict)  # "status|practice|role"
@@ -60,12 +70,31 @@ class SimParams:
         key = str(max(prior)) if prior else min(self.fg_distance, key=int)
         return self.fg_distance[key], self.fg_make[key]
 
-    def play_probability(self, status: str | None, practice: str | None, role: bool) -> float:
-        if status in (None, "", "Probable", "Note"):
-            return 1.0
+    def play_probability(
+        self,
+        status: str | None,
+        practice: str | None,
+        role: bool,
+        prev_out: bool = False,
+        final: bool = True,
+    ) -> float:
+        """P(plays). With a game designation, use it. Without one, the player may simply
+        not have been designated *yet* (statuses come with the final report, usually
+        Friday), so before that (`final=False`) a missed or limited practice counts, as does
+        having been Out the week before. On a final report, no designation = cleared."""
+        r = "role" if role else "depth"
         if status == "Out":
             return 0.0
-        r = "role" if role else "depth"
+        if status in (None, "", "Probable", "Note"):
+            # On a final report no designation means cleared to play.
+            if final or practice not in PENDING_PRACTICE:
+                return 1.0
+            prev = "prev_out" if prev_out else "prev_ok"
+            for key in (f"pending|{practice}|{r}|{prev}", f"pending|{practice}|{r}|any",
+                        f"pending|{practice}|any|any"):  # fmt: skip
+                if key in self.p_play:
+                    return self.p_play[key]
+            return 1.0
         for key in (f"{status}|{practice}|{r}", f"{status}|any|{r}", f"{status}|any|any"):
             if key in self.p_play:
                 return self.p_play[key]
@@ -113,6 +142,42 @@ def _availability(injuries: pl.DataFrame, snaps: pl.DataFrame, player_games: pl.
     inj = inj.join(played, on=["key", "season", "week"], how="left").with_columns(
         pl.col("played").fill_null(False)
     )
+    # "Pending": what a missed or limited practice says before a game status exists.
+    # Fitted on every report row with that practice level, whatever status followed, and
+    # split by whether the player was Out the week before.
+    out_weeks = (
+        injuries.filter(pl.col("report_status") == "Out")
+        .select(pl.col("gsis_id").alias("key"), "season", (pl.col("week") + 1).alias("week"))
+        .unique()
+        .with_columns(pl.lit("prev_out").alias("prev"))
+    )
+    pend = (
+        injuries.filter(
+            pl.col("practice_status").is_in(list(PENDING_PRACTICE))
+            & ~pl.col("practice_primary_injury")
+            .fill_null("")
+            .str.to_lowercase()
+            .str.contains("rest")
+        )
+        .select(
+            pl.col("gsis_id").alias("key"),
+            "season",
+            "week",
+            pl.col("practice_status").alias("practice"),
+        )  # fmt: skip
+        .unique(["key", "season", "week"])
+        .join(out_weeks, on=["key", "season", "week"], how="left")
+        .with_columns(pl.col("prev").fill_null("prev_ok"))
+    )
+    pend = pend.sort("week").join_asof(
+        role.sort("week"), on="week", by=["key", "season"], strategy="backward",
+        allow_exact_matches=False, check_sortedness=False,
+    ).with_columns(
+        pl.when(pl.col("prior_snap_pct") >= STARTER_SNAP_PCT).then(pl.lit("role"))
+        .otherwise(pl.lit("depth")).alias("role")
+    ).join(played, on=["key", "season", "week"], how="left").with_columns(
+        pl.col("played").fill_null(False)
+    )  # fmt: skip
     out: dict[str, float] = {}
     for keys in (["status", "practice", "role"], ["status", "role"], ["status"]):
         g = inj.group_by(keys).agg(pl.len().alias("n"), pl.col("played").mean().alias("p"))
@@ -122,6 +187,12 @@ def _availability(injuries: pl.DataFrame, snaps: pl.DataFrame, player_games: pl.
                 row.get("practice", "any") if "practice" in keys else "any",
                 row.get("role", "any") if "role" in keys else "any",
             ])  # fmt: skip
+            out[key] = round(float(row["p"]), 4)
+    for keys in (["practice", "role", "prev"], ["practice", "role"], ["practice"]):
+        g = pend.group_by(keys).agg(pl.len().alias("n"), pl.col("played").mean().alias("p"))
+        for row in g.filter(pl.col("n") >= 30).iter_rows(named=True):
+            key = "|".join(["pending", row["practice"], row.get("role", "any"),
+                            row.get("prev", "any")])  # fmt: skip
             out[key] = round(float(row["p"]), 4)
     return out
 

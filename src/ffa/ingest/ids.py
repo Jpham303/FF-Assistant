@@ -107,6 +107,11 @@ def load_sleeper_players(client: httpx.Client | None = None) -> pl.DataFrame:
             "name": p.get("full_name"),
             "position": p.get("position"),
             "team": p.get("team"),
+            # Injury fields, kept as Sleeper reports them; see ffa.ingest.status
+            "injury_status": p.get("injury_status"),
+            "injury_body_part": p.get("injury_body_part"),
+            "practice_participation": p.get("practice_participation"),
+            "news_updated": str(p["news_updated"]) if p.get("news_updated") else None,
         }
         for pid, p in data.items()
     ]

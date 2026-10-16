@@ -190,7 +190,9 @@ def test_best_lineup_fills_restrictive_slots_first(warehouse):
 def test_week_and_search(client):
     w = client.get("/week").json()
     assert (w["season"], w["week"], w["projections_available"]) == (SEASON, WEEK, True)
-    assert w["projections_generated_at"] and w["injuries_as_of"] is None  # no injuries table
+    assert (
+        w["projections_generated_at"] and w["nflverse_injuries_fetched_at"] is None
+    )  # no injuries table
     assert any("nflverse" in s for s in w["sources"])
     r = client.get("/players/search", params={"q": "echo williams"}).json()
     assert r[0]["key"] == BYE[0] and r[0]["projected"] is False
@@ -240,5 +242,5 @@ def test_my_team(client):
     assert slots["RB"]["key"] == "00-A" and slots["WR"]["key"] == "00-C"
     (benched,) = d["bench"]  # the lower of the two FLEX candidates sits
     assert benched["mean"] <= slots["FLEX"]["mean"]
-    assert d["not_playing"] == [BYE[1]]
+    assert d["not_playing"] == [f"{BYE[1]} (bye or not on an active roster)"]
     assert client.get("/leagues").json()[0]["league"] == "sleeper:1"

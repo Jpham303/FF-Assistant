@@ -80,6 +80,13 @@ each game:
 
 Well calibrated, slightly overconfident above 70%.
 
+## Changes after the holdout
+
+- **Midweek availability (Oct 2026).** Before a team's final injury report, a player with no
+  designation who missed or was limited in practice now gets a reduced chance to play. The
+  holdout used final reports, where this rule does not apply (it touches 2 of 8,602
+  2025 player-weeks), so the results above stand.
+
 ## Known limitations (for Phase 3)
 
 - Win probabilities above 70% run 2–4 points high; recalibrate on 2024 and recheck.

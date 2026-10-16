@@ -47,6 +47,17 @@ def upcoming_week(con, season: int) -> int | None:
     return int(row[0]) if row and row[0] is not None else None
 
 
+def _sleeper_status(con, season: int, week: int) -> pl.DataFrame | None:
+    """Latest Sleeper status snapshot for the week, if one has been fetched."""
+    try:
+        return con.sql(
+            f"select * exclude (_ingested_at) from sleeper_status "
+            f"where season = {int(season)} and week = {int(week)}"
+        ).pl()
+    except Exception:  # not fetched yet: nflverse alone
+        return None
+
+
 @dataclass
 class RunResult:
     season: int
@@ -63,6 +74,7 @@ def run_week(con, warehouse_dir: str | Path, models: Models, season: int, week: 
         team_games=q("team_games"), player_games=q("player_games"),
         rosters=con.sql(f"select * from rosters where season = {int(season)}").pl(),
         injuries=con.sql(f"select * from injuries where season = {int(season)}").pl(),
+        statuses=_sleeper_status(con, season, week),
     )  # fmt: skip
     lines = simulate(inp, models.sim, n=n, seed=season * 100 + week)
     tag = pl.lit(season).cast(pl.Int32).alias("season"), pl.lit(week).cast(pl.Int32).alias("week")

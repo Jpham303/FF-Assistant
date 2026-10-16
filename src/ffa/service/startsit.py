@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import difflib
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from itertools import permutations
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import polars as pl
 
+from ffa.config import settings
 from ffa.ingest.ids import normalize_name
 from ffa.leagues.base import SLOT_ELIGIBILITY
 from ffa.scoring import breakdown, score
@@ -66,6 +69,9 @@ class PlayerView:
     p90: float
     play_probability: float
     injury_status: str | None
+    injury_source: str | None
+    injury_updated_at: str | None
+    injury_fetched_at: str | None
     expected_stats: dict[str, float]
     points_by_rule: dict[str, float]
     drivers: list[str]
@@ -161,6 +167,55 @@ def _pct(x: float) -> str:
     return f"{abs(x - 1) * 100:.0f}%"
 
 
+OUT_THRESHOLD = 0.02  # below this chance to play, treat the player as ruled out
+PRACTICE_SHORT = {
+    "Did Not Participate In Practice": "did not practice",
+    "Limited Participation in Practice": "limited in practice",
+    "Full Participation in Practice": "full practice",
+}
+
+
+def when(ts) -> str | None:
+    """A timestamp as local time, e.g. 'Fri Oct 16 5:02 PM CDT'."""
+    if ts is None:
+        return None
+    if isinstance(ts, str):
+        ts = datetime.fromisoformat(ts)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    local = ts.astimezone(ZoneInfo(settings.timezone))
+    return local.strftime("%a %b %d %I:%M %p %Z").replace(" 0", " ")
+
+
+def provenance(row: dict) -> str:
+    """Which source the injury information came from and how fresh it is."""
+    src = row.get("injury_source") or "nflverse"
+    parts = []
+    if row.get("injury_updated_at") is not None:
+        parts.append(f"updated {when(row['injury_updated_at'])}")
+    if row.get("injury_fetched_at") is not None:
+        parts.append(f"fetched {when(row['injury_fetched_at'])}")
+    return f"{src}, {'; '.join(parts)}" if parts else src
+
+
+def injury_line(row: dict) -> str | None:
+    """The injury picture with its source and time, or None for a healthy player."""
+    status, practice = row.get("injury_status"), row.get("practice")
+    p = float(row.get("p_play", 1.0) or 0.0)
+    injury = f" ({row['injury'].lower()})" if row.get("injury") else ""
+    prev = "; was Out last week" if row.get("prev_out") else ""
+    if status:
+        prac = f", {PRACTICE_SHORT.get(practice, practice).lower()}" if practice else ""
+        head = "OUT" if status == "Out" else status
+        return (f"Injury: {head}{injury}{prac}{prev} [{provenance(row)}]; "
+                f"plays in {p * 100:.0f}% of simulations")  # fmt: skip
+    if p < 1.0 and practice:
+        return (f"No game status yet, but {PRACTICE_SHORT.get(practice, practice)} this week"
+                f"{injury}{prev} [{provenance(row)}]; plays in {p * 100:.0f}% of simulations. "
+                "Statuses usually come with Friday's final report")  # fmt: skip
+    return None
+
+
 def drivers(row: dict, team: dict | None, position: str) -> list[str]:
     """Plain-language reasons, each with the number it rests on."""
     out = []
@@ -175,11 +230,9 @@ def drivers(row: dict, team: dict | None, position: str) -> list[str]:
             f"implied to score {team['implied']:.1f} points; "
             f"projected {team['mu_plays']:.0f} plays, {team['p_pass'] * 100:.0f}% passes"
         )
-    status = row.get("injury_status")
-    if status:
-        practice = f", {row['practice'].lower()}" if row.get("practice") else ""
-        out.append(f"Injury report: {status}{practice}; plays in "
-                   f"{row['p_play'] * 100:.0f}% of simulations")  # fmt: skip
+    line = injury_line(row)
+    if line:
+        out.append(line)
     if position in ("RB", "QB") and (row.get("car_share_s") or 0) > 0.02:
         out.append(f"Expected share of designed runs: {row['car_share_s'] * 100:.1f}% "
                    f"(red zone {row['rz_car_share_s'] * 100:.1f}%)")  # fmt: skip
@@ -233,6 +286,10 @@ def player_views(w: Week, rules: ScoringRules) -> dict[str, PlayerView]:
             p10=float(f.quantile(0.1)), p90=float(f.quantile(0.9)),
             play_probability=float(row.get("p_play", 1.0) or 0.0),
             injury_status=row.get("injury_status"),
+            injury_source=row.get("injury_source") if row.get("injury_status") or
+            row.get("practice") else None,
+            injury_updated_at=when(row.get("injury_updated_at")),
+            injury_fetched_at=when(row.get("injury_fetched_at")),
             expected_stats={STAT_LABELS[s]: round(float(g[s].mean()), 2)
                             for s in POSITION_STATS.get(pos, []) if s in g.columns},
             points_by_rule={t: round(float(p), 2) for t, p in rule_pts.iter_rows()},
@@ -257,20 +314,33 @@ def compare(w: Week, rules: ScoringRules) -> Comparison:
         p = float(((arr[:, a] > arr[:, b]) + 0.5 * (arr[:, a] == arr[:, b])).mean())
         pairwise.append({"a": keys[a], "b": keys[b], "p_a_beats_b": round(p, 3)})
     ranked = sorted(views.values(), key=lambda v: v.mean, reverse=True)
+    # A ruled-out player is never the recommendation, whatever his mean says.
+    playing = [v for v in ranked if v.play_probability >= OUT_THRESHOLD] or ranked
+    ranked = playing + [v for v in ranked if v not in playing]
     top, second = ranked[0], ranked[1] if len(ranked) > 1 else None
     p_top = next((x["p_a_beats_b"] for x in pairwise
                   if second and x["a"] == top.key and x["b"] == second.key), 1.0)  # fmt: skip
     notes = []
-    if second and p_top < CLOSE_CALL:
+    for v in ranked:
+        if v.play_probability < OUT_THRESHOLD:
+            notes.append(f"{v.name} is ruled OUT or very unlikely to play "
+                         f"({v.play_probability * 100:.0f}% in simulations; "
+                         f"{v.injury_source or 'nflverse'}, "
+                         f"{v.injury_updated_at or v.injury_fetched_at or 'time unknown'}). "
+                         "Don't start him.")  # fmt: skip
+    if second and p_top < CLOSE_CALL and second.play_probability >= OUT_THRESHOLD:
         notes.append(f"Close call: {top.name} outscores {second.name} in only "
                      f"{p_top * 100:.0f}% of simulations.")  # fmt: skip
     for v in ranked:
-        if v.play_probability < 0.95:
-            notes.append(f"{v.name} is {v.injury_status or 'uncertain'}: projection includes a "
-                         f"{(1 - v.play_probability) * 100:.0f}% chance he sits.")  # fmt: skip
+        if OUT_THRESHOLD <= v.play_probability < 0.95:
+            stamp = v.injury_updated_at or v.injury_fetched_at or "time unknown"
+            notes.append(f"{v.name} is {v.injury_status or 'not designated yet'}: projection "
+                         f"includes a {(1 - v.play_probability) * 100:.0f}% chance he sits "
+                         f"({v.injury_source or 'nflverse'}, {stamp}).")  # fmt: skip
+    close = bool(second and p_top < CLOSE_CALL and second.play_probability >= OUT_THRESHOLD)
     return Comparison(
         season=w.season, week=w.week, players=ranked, pairwise=pairwise,
-        recommendation=top.key, close_call=bool(second and p_top < CLOSE_CALL), notes=notes,
+        recommendation=top.key, close_call=close, notes=notes,
     )  # fmt: skip
 
 
@@ -285,7 +355,11 @@ def best_lineup(views: dict[str, PlayerView], slots: list[str]) -> list[dict]:
     filled: dict[int, dict] = {}
     for i in order:
         eligible = SLOT_ELIGIBILITY.get(slots[i], frozenset())
-        cands = [v for v in views.values() if v.position in eligible and v.key not in used]
+        cands = [
+            v
+            for v in views.values()
+            if v.position in eligible and v.key not in used and v.play_probability >= OUT_THRESHOLD
+        ]
         if not cands:
             filled[i] = {"slot": slots[i], "key": None, "name": None, "mean": 0.0}
             continue
