@@ -183,8 +183,10 @@ def test_best_lineup_fills_restrictive_slots_first(warehouse):
 
 
 def test_week_and_search(client):
-    assert client.get("/week").json() == {"season": SEASON, "week": WEEK,
-                                          "projections_available": True}  # fmt: skip
+    w = client.get("/week").json()
+    assert (w["season"], w["week"], w["projections_available"]) == (SEASON, WEEK, True)
+    assert w["projections_generated_at"] and w["injuries_as_of"] is None  # no injuries table
+    assert any("nflverse" in s for s in w["sources"])
     r = client.get("/players/search", params={"q": "echo williams"}).json()
     assert r[0]["key"] == BYE[0] and r[0]["projected"] is False
 
@@ -194,7 +196,7 @@ def test_start_sit(client):
     assert r.status_code == 200
     d = r.json()
     assert d["scoring"] == "default half-PPR"
-    assert d["recommendation"] == "00-A"
+    assert d["recommendation"] == "00-A" and d["recommendation_name"] == "Alpha Back"
     assert {p["key"] for p in d["players"]} == {"00-A", "00-B"}
     assert all(p["drivers"] for p in d["players"])
 

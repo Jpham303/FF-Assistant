@@ -8,6 +8,7 @@ with /players/search first.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import datetime
 
 import duckdb
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -62,6 +63,23 @@ class WeekInfo(BaseModel):
     season: int
     week: int | None
     projections_available: bool
+    projections_generated_at: datetime | None = Field(
+        None, description="When this week's simulations were run (UTC)"
+    )
+    injuries_as_of: datetime | None = Field(
+        None, description="When the injury report used was fetched from nflverse (UTC)"
+    )
+    sources: list[str] = Field(default_factory=list)
+
+
+SOURCES = [
+    "nflverse play-by-play, player stats, snap counts, rosters and injury reports "
+    "(github.com/nflverse)",
+    "Betting lines (spread, total) as published in nflverse schedules",
+    "ffopportunity expected points (github.com/ffverse/ffopportunity), used in evaluation",
+    "FF Assistant simulation model: 2,000 simulated games per week; 2025 holdout results "
+    "in docs/evaluation_2025.md",
+]
 
 
 class SearchResult(BaseModel):
@@ -110,6 +128,7 @@ class StartSitResponse(BaseModel):
     week: int
     scoring: str
     recommendation: str
+    recommendation_name: str
     close_call: bool
     notes: list[str]
     players: list[Player]
@@ -180,15 +199,22 @@ def health() -> dict[str, str]:
 def week_info(con=Depends(get_con)) -> WeekInfo:
     season = settings.current_season
     w = upcoming_week(con, season)
-    available = False
-    if w is not None:
+    info = WeekInfo(season=season, week=w, projections_available=False, sources=SOURCES)
+    if w is None:
+        return info
+
+    def latest(table: str):
         try:
-            available = bool(con.sql(
-                f"select count(*) from projection_sims where season = {season} and week = {w}"
-            ).fetchone()[0])  # fmt: skip
+            return con.sql(
+                f"select max(_ingested_at) from {table} where season = {season} and week = {w}"
+            ).fetchone()[0]
         except duckdb.Error:
-            available = False
-    return WeekInfo(season=season, week=w, projections_available=available)
+            return None
+
+    info.projections_generated_at = latest("projection_sims")
+    info.projections_available = info.projections_generated_at is not None
+    info.injuries_as_of = latest("injuries")
+    return info
 
 
 @app.get("/players/search", response_model=list[SearchResult])
@@ -232,7 +258,8 @@ def start_sit(req: StartSitRequest, con=Depends(get_con), db=Depends(get_db)) ->
         raise HTTPException(422, "Duplicate players")
     c = startsit.compare(_views(con, req.players, rules, season, w), rules)
     d = startsit.as_dict(c)
-    return StartSitResponse(scoring=label, **d)
+    name = next(p["name"] for p in d["players"] if p["key"] == d["recommendation"])
+    return StartSitResponse(scoring=label, recommendation_name=name, **d)
 
 
 @app.get("/leagues")

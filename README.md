@@ -146,14 +146,42 @@ is applied at request time. Interactive docs at http://localhost:8000/docs.
 
 | Endpoint | What it returns |
 | --- | --- |
-| `GET /week` | current season, upcoming week, whether projections exist |
+| `GET /week` | current season, upcoming week, when projections ran, when the injury report was fetched, data sources |
 | `GET /players/search?q=` | player keys by name, typos allowed; `match` (1.0 = exact) and `projected` (false on a bye). A bye-week player is reported as not playing, never swapped for a similar name |
 | `GET /projections?keys=` | mean, median, 10th–90th percentile, play probability, expected stats, points per scoring rule, and plain-language drivers each carrying its number |
-| `POST /start-sit` | 2–6 players: recommendation, P(each outscores each other) from simulations that share each game, close-call and injury notes |
+| `POST /start-sit` | 2–6 players: recommendation (key and name), P(each outscores each other) from simulations that share each game, close-call and injury notes |
 | `GET /leagues/{id}/my-team` | best lineup for your roster under the league's slots and scoring; bench; who isn't playing |
 
 Pass `league` (e.g. `sleeper:<league_id>`) to score with that league's settings; without
 it, `SLEEPER_LEAGUE_ID` or standard half-PPR is used.
+
+## Use it from Claude (MCP)
+
+`ffa-mcp` is an MCP server that gives AI assistants six read-only tools over the API:
+`current_week`, `search_players`, `start_sit`, `player_projections`, `list_leagues`,
+`my_team`. Tools accept player names; a name is used only on an exact match for a player
+who is playing this week, otherwise the tool reports the problem instead of guessing.
+The server's instructions tell the assistant to cite only numbers the tools return, to
+treat matchups as a small factor, and to name the data sources and timestamps.
+
+1. Start the stack: `docker compose up` (the API must be reachable at `FFA_API_URL`,
+   default `http://localhost:8000`).
+2. Add to Claude Desktop's config (`~/Library/Application Support/Claude/claude_desktop_config.json`
+   on macOS, `%APPDATA%\Claude\claude_desktop_config.json` on Windows), then restart it:
+
+```json
+{
+  "mcpServers": {
+    "ff-assistant": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/FF-Assistant", "run", "ffa-mcp"],
+      "env": { "FFA_API_URL": "http://localhost:8000" }
+    }
+  }
+}
+```
+
+If Claude Desktop can't find `uv`, use its full path (`which uv`).
 
 ## Develop
 

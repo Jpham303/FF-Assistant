@@ -21,10 +21,12 @@ dependencies = [
     "statsmodels>=0.15.0",
     "scipy>=1.18.1",
     "numpy>=2.5.4",
+    "mcp>=1.10",
 ]
 
 [project.scripts]
 ffa = "ffa.cli:main"
+ffa-mcp = "ffa.mcp_server:main"
 
 [dependency-groups]
 dev = [
