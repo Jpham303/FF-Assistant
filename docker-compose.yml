@@ -9,7 +9,7 @@ services:
   postgres:
     image: postgres:16
     env_file: .env
-    ports: ["127.0.0.1:5433:5432"]  # host 5433: avoids clashing with a local Postgres
+    ports: ["127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
@@ -28,12 +28,12 @@ services:
   api:
     <<: *app
     command: uvicorn ffa.api.main:app --host 0.0.0.0 --port 8000
-    ports: ["127.0.0.1:8000:8000"]
+    ports: ["127.0.0.1:${API_PORT:-8000}:8000"]
 
   dagster-webserver:
     <<: *app
     command: dagster-webserver -h 0.0.0.0 -p 3000 -w workspace.yaml
-    ports: ["127.0.0.1:3000:3000"]
+    ports: ["127.0.0.1:${DAGSTER_PORT:-3300}:3000"]
 
   dagster-daemon:
     <<: *app
