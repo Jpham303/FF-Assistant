@@ -34,8 +34,15 @@ app = FastAPI(
 # ---------------------------------------------------------------- dependencies
 
 
+# The only warehouse tables the API reads (dims such as player_ids are always available).
+API_DATASETS = (
+    "schedules", "injuries", "team_games",
+    "projection_sims", "projection_inputs", "projection_teams",
+)  # fmt: skip
+
+
 def get_con() -> Iterator[duckdb.DuckDBPyConnection]:
-    con = duck.connect(settings.warehouse_dir)
+    con = duck.connect(settings.warehouse_dir, datasets=API_DATASETS)
     try:
         yield con
     finally:

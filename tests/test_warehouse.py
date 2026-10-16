@@ -60,3 +60,15 @@ def test_folders_without_parquet_are_ignored(tmp_path):
     store.write(pl.DataFrame({"season": [2026], "week": [1], "x": [1]}), tmp_path, "player_stats")
     con = duck.connect(tmp_path)
     assert con.sql("select count(*) from player_stats").fetchone()[0] == 1
+
+
+def test_connect_only_requested_datasets(tmp_path):
+    import polars as pl
+
+    from ffa.warehouse import duck, store
+
+    df = pl.DataFrame({"season": [2026], "week": [1], "x": [1]})
+    store.write(df, tmp_path, "a")
+    store.write(df, tmp_path, "b")
+    names = {r[0] for r in duck.connect(tmp_path, datasets=["a"]).sql("show tables").fetchall()}
+    assert "a" in names and "b" not in names

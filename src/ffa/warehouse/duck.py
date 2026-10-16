@@ -8,16 +8,25 @@ Each file in dims/ (e.g. player_ids) becomes a plain view of the same name.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 
 import duckdb
 
 
-def connect(root: str | Path, database: str = ":memory:") -> duckdb.DuckDBPyConnection:
+def connect(
+    root: str | Path, database: str = ":memory:", datasets: Iterable[str] | None = None
+) -> duckdb.DuckDBPyConnection:
+    """Views over the warehouse. `datasets` limits which dataset views are created: each one
+    reads every file's metadata, which is slow on a cold cache or a Docker bind mount, so
+    callers that need only a few tables (the API) should name them."""
     root = Path(root)
     con = duckdb.connect(database)
     dirs = sorted(p for p in root.iterdir() if p.is_dir()) if root.exists() else []
+    if datasets is not None:
+        wanted = set(datasets)
+        dirs = [d for d in dirs if d.name in wanted]
     for dim in sorted((root / "dims").glob("*.parquet")) if root.exists() else []:
         con.execute(
             f"CREATE OR REPLACE VIEW {dim.stem} AS SELECT * FROM read_parquet('{dim.as_posix()}')"
