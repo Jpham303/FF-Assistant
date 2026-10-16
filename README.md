@@ -32,6 +32,7 @@ docker compose up --build
 
 - API: http://localhost:8000/health
 - Dagster: http://localhost:3000
+- Postgres (for a SQL client): localhost:5433. Ports are bound to this computer only, not your network.
 
 ## Load data
 
