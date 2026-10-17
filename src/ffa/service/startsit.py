@@ -224,6 +224,10 @@ def injury_line(row: dict) -> str | None:
     """The injury picture with its source and time, or None for a healthy player."""
     status, practice = row.get("injury_status"), row.get("practice")
     p = float(row.get("p_play", 1.0) or 0.0)
+    roster = row.get("roster_status")
+    if roster in ("INA", "RES") and not status:
+        what = "On injured reserve" if roster == "RES" else "Inactive this week"
+        return f"{what} [team roster, nflverse]; plays in 0% of simulations"
     injury = f" ({row['injury'].lower()})" if row.get("injury") else ""
     prev = "; was Out last week" if row.get("prev_out") else ""
     if status:

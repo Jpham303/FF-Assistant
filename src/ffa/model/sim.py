@@ -4,8 +4,11 @@ Each of `n` simulations plays every game once. Within a game everything is consi
 targets and carries are split from the team's simulated volume, the quarterback's passing
 is the sum of his receivers' production, extra points follow the team's touchdowns, and a
 defense's sacks, takeaways and points allowed come from the opponent's simulated game.
-Players inactive in a simulation (injury) have their share redistributed to active
-teammates in proportion to the teammates' own shares.
+Players inactive in a simulation (injury) have their share redistributed: a fraction
+`inherit_keep` of it goes to active teammates at the same position (the backup takes over
+the role, goal-line work included), the rest to all active teammates in proportion to
+their shares. Touchdowns follow the same redistribution, so a back who inherits the
+starter's carries inherits his touchdown rate on them too.
 
 Output: canonical stat lines per (player or defense, simulation), scored by the same
 validated engine as real games, so any league's rules apply.
@@ -35,20 +38,40 @@ def _underdispersed(rng, mu: np.ndarray, phi: float, size: int) -> np.ndarray:
     return rng.binomial(m[:, None], p[:, None], size=(len(mu), size))
 
 
-def _allocate(rng, total: np.ndarray, shares: np.ndarray, active: np.ndarray, conc: float):
+def _inherit(shares: np.ndarray, active: np.ndarray, group: np.ndarray | None,
+             keep: float) -> np.ndarray:  # fmt: skip
+    """(P, S) shares after absences: inactive players' shares are zeroed and a fraction
+    `keep` of each group's lost share goes to its active members, in proportion to their
+    own shares. The remainder is left for the caller's renormalization (all players)."""
+    shares = np.clip(np.nan_to_num(shares), 0, None)
+    w = shares[:, None] * active  # (P, S)
+    if group is None or keep <= 0:
+        return w
+    lost_all = shares[:, None] * ~active
+    for g in np.unique(group):
+        m = group == g
+        lost = lost_all[m].sum(axis=0)  # (S,)
+        have = w[m].sum(axis=0)
+        gain = np.where(have > 0, keep * lost / np.maximum(have, 1e-12), 0.0)
+        w[m] = w[m] * (1 + gain)
+    return w
+
+
+def _allocate(rng, total: np.ndarray, shares: np.ndarray, active: np.ndarray, conc: float,
+              group: np.ndarray | None = None, keep: float = 0.0):  # fmt: skip
     """Split `total[s]` across players (+ an 'other' pool) for each simulation s.
 
     shares: (P,) expected shares; active: (P, S) bool. The other pool keeps what the
-    roster as a whole doesn't account for; an inactive player's share goes to active
-    teammates in proportion to theirs. Dirichlet-multinomial with concentration `conc`.
+    roster as a whole doesn't account for; an inactive player's share goes first (a
+    fraction `keep`) to active teammates in his `group`, then to all active teammates in
+    proportion to theirs. Dirichlet-multinomial with concentration `conc`.
     Returns (P + 1, S) counts, the last row being the other pool.
     """
-    shares = np.clip(np.nan_to_num(shares), 0, None)
     # Shares are estimated player by player, so a team's sum drifts from 1 (0.65-1.35 in
     # practice). Fix the pool for players outside the active roster at OTHER_SHARE and
     # scale active players to fill the rest.
     other = OTHER_SHARE
-    w = shares[:, None] * active  # (P, S)
+    w = _inherit(shares, active, group, keep)
     tot = w.sum(axis=0)
     scale = np.where(tot > 0, (1 - other) / np.maximum(tot, 1e-12), 0.0)
     w = w * scale
@@ -58,6 +81,16 @@ def _allocate(rng, total: np.ndarray, shares: np.ndarray, active: np.ndarray, co
     p = (g / g.sum(axis=0, keepdims=True)).T  # (S, P+1)
     p[:, :] = np.where(p.sum(axis=1, keepdims=True) > 0, p, 1.0 / p.shape[1])
     return rng.multinomial(total.astype(np.int64), p).T
+
+
+def _propensity(td_share: np.ndarray, opp_share: np.ndarray, active: np.ndarray,
+                group: np.ndarray, keep: float) -> np.ndarray:  # fmt: skip
+    """(P, S) touchdowns per opportunity, relative, after absences. With everyone active
+    it is td_share / opp_share; when a player is out, his TD share and opportunity share
+    are inherited together, so his successor's rate moves toward his."""
+    td = _inherit(td_share, active, group, keep)
+    opp = _inherit(opp_share, active, group, keep)
+    return np.clip(np.nan_to_num(td / np.maximum(opp, 1e-3)), 0, 5)
 
 
 def _choose(rng, weights: np.ndarray, active: np.ndarray) -> np.ndarray:
@@ -125,9 +158,11 @@ def simulate(inp: WeekInputs, sp: SimParams, n: int = 2000, seed: int = 0) -> pl
         pos = sk["position"].to_numpy()
         team_m = teams.row(ti, named=True)
 
+        keep = sp.inherit_keep
         tgt = _allocate(rng, team_targets[ti], col("tgt_share_s") * col("m_tgt"), active,
-                        sp.target_concentration)  # fmt: skip
-        car = _allocate(rng, designed[ti], col("car_share_s"), active, sp.carry_concentration)
+                        sp.target_concentration, pos, keep)  # fmt: skip
+        car = _allocate(rng, designed[ti], col("car_share_s"), active, sp.carry_concentration,
+                        pos, keep)  # fmt: skip
         p_tgt, o_tgt = tgt[:P], tgt[P]
         p_car = car[:P]
 
@@ -158,14 +193,10 @@ def simulate(inp: WeekInputs, sp: SimParams, n: int = 2000, seed: int = 0) -> pl
 
         # Touchdowns go to players in proportion to realized opportunity times their
         # TD-per-opportunity propensity, so a player without a touch can't score.
-        rec_prop = np.clip(
-            np.nan_to_num(col("rec_td_share_s") / np.maximum(col("tgt_share_s"), 1e-3)), 0, 5
-        )
-        w_rec = np.vstack([p_tgt * rec_prop[:, None], o_tgt[None, :] * 1.0]).astype(float)
-        rush_prop = np.clip(
-            np.nan_to_num(col("rush_td_share_s") / np.maximum(col("car_share_s"), 1e-3)), 0, 5
-        )
-        w_rush = (rush_att * rush_prop[:, None]).astype(float)
+        rec_prop = _propensity(col("rec_td_share_s"), col("tgt_share_s"), active, pos, keep)
+        w_rec = np.vstack([p_tgt * rec_prop, o_tgt[None, :] * 1.0]).astype(float)
+        rush_prop = _propensity(col("rush_td_share_s"), col("car_share_s"), active, pos, keep)
+        w_rush = (rush_att * rush_prop).astype(float)
         rec_td = _split(rng, pass_tds[ti], w_rec)[:P]
         rush_td = _split(rng, rush_tds[ti], w_rush)
 

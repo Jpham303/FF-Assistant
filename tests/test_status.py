@@ -202,3 +202,30 @@ def test_api_drivers_include_simulated_volume(warehouse):  # noqa: F811
     w = startsit.load_week(duck.connect(warehouse), 2026, 6, ["00-A"])
     v = startsit.player_views(w, default_rules())["00-A"]
     assert any(d.startswith("Projected ") and "carries" in d for d in v.drivers)
+
+
+def test_inactive_and_ir_players_are_explained():
+    assert startsit.injury_line({"roster_status": "RES", "p_play": 0.0}).startswith(
+        "On injured reserve [team roster"
+    )
+    assert startsit.injury_line({"roster_status": "INA", "p_play": 0.0}).startswith(
+        "Inactive this week"
+    )
+
+
+def test_inheritance_moves_an_absent_starters_role_to_his_position():
+    import numpy as np
+
+    from ffa.model.sim import _inherit, _propensity
+
+    shares = np.array([0.5, 0.3, 0.1])  # RB1 (out), RB2, QB
+    pos = np.array(["RB", "RB", "QB"])
+    active = np.array([[False], [True], [True]])
+    assert np.allclose(_inherit(shares, active, pos, 0.0)[:, 0], [0, 0.3, 0.1])  # old model
+    w = _inherit(shares, active, pos, 1.0)[:, 0]
+    assert np.allclose(w, [0, 0.8, 0.1])  # all of RB1's share stays with the RBs
+    # TD rate: RB2 inherits RB1's goal-line share along with his carries
+    td = np.array([0.6, 0.1, 0.3])
+    p0 = _propensity(td, shares, active, pos, 0.0)[:, 0]
+    p1 = _propensity(td, shares, active, pos, 1.0)[:, 0]
+    assert p1[1] > p0[1] and np.isclose(p1[2], p0[2])

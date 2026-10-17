@@ -37,6 +37,9 @@ def is_rest(reason: str | None) -> bool:
 @dataclass
 class SimParams:
     p_play: dict[str, float] = field(default_factory=dict)  # "status|practice|role"
+    # Share of an absent player's work that stays with his position group (0 = spread
+    # across all active teammates by their shares). Chosen by backtest; see issue #1.
+    inherit_keep: float = 0.0
     rec_yd_shape: float = 1.0
     rush_yd_sd: float = 5.0
     target_concentration: float = 50.0

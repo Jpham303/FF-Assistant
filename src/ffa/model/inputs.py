@@ -93,12 +93,17 @@ def _teams(team_games: pl.DataFrame, models: Models, season: int, week: int) -> 
     )  # fmt: skip
 
 
+RECENT_TEAM_GAMES = 2  # an absent player still holds a role if he played this recently
+
+
 def _roster(rosters: pl.DataFrame, season: int, week: int) -> pl.DataFrame:
+    """This week's roster: active players, plus inactive / injured-reserve players (who
+    will not play) so that a recently absent starter's role can pass to his teammates."""
     r = rosters.filter((pl.col("season") == season) & (pl.col("week") <= week))
     latest = r.filter(pl.col("week") == r["week"].max()) if r.height else r
     return (
         latest.filter(
-            (pl.col("status") == "ACT")
+            pl.col("status").is_in(["ACT", "INA", "RES"])
             & pl.col("gsis_id").is_not_null()
             & pl.col("position").replace({"FB": "RB"}).is_in(POSITIONS)
         )
@@ -107,9 +112,30 @@ def _roster(rosters: pl.DataFrame, season: int, week: int) -> pl.DataFrame:
             pl.col("full_name").alias("name"),
             pl.col("team").replace(TEAM_ALIASES),
             pl.col("position").replace({"FB": "RB"}),
+            pl.col("status").alias("roster_status"),
         )
         .unique("key")
     )
+
+
+def _recently_played(history: pl.DataFrame, roster: pl.DataFrame) -> pl.DataFrame:
+    """Keys of inactive/IR players who played for their team in one of its last
+    RECENT_TEAM_GAMES games. Older absences are already reflected in teammates' shares."""
+    absent = roster.filter(pl.col("roster_status") != "ACT").select("key", "team")
+    if absent.height == 0 or history.height == 0:
+        return absent.select("key").head(0)
+    games = (
+        history.select("team", "season", "week").unique()
+        .sort("season", "week", descending=True)
+        .with_columns(pl.int_range(pl.len()).over("team").alias("rank"))
+        .filter(pl.col("rank") < RECENT_TEAM_GAMES)
+    )  # fmt: skip
+    played = history.filter(pl.col("played")) if "played" in history.columns else history
+    return (
+        played.join(games, on=["team", "season", "week"], how="semi")
+        .select("key", "team").unique()
+        .join(absent, on=["key", "team"], how="semi").select("key")
+    )  # fmt: skip
 
 
 def build(
@@ -131,6 +157,10 @@ def build(
     )
 
     history = _before(player_games, season, week)
+    recent = _recently_played(history, roster)
+    roster = roster.filter(
+        (pl.col("roster_status") == "ACT") | pl.col("key").is_in(recent["key"].implode())
+    )
     to_predict = roster.with_columns(
         pl.lit(season).cast(history["season"].dtype).alias("season"),
         pl.lit(week).cast(history["week"].dtype).alias("week"),
@@ -197,8 +227,13 @@ def build(
             "injury_status", "practice", "season_snap_pct", "prev_out", "final_report"
         ).iter_rows(named=True)
     ]
+    # Inactive / injured reserve this week: will not play, but his role is inherited.
+    p_play = [
+        0.0 if rs != "ACT" else p for p, rs in zip(p_play, players["roster_status"], strict=True)
+    ]
     keep = [
-        "key", "name", "team", "opponent", "game_id", "position", "injury_status",
+        "key", "name", "team", "opponent", "game_id", "position", "roster_status",
+        "injury_status",
         "practice", "injury", "injury_source", "injury_updated_at", "injury_fetched_at",
         "prev_out", "final_report", "season_snap_pct", "m_tgt", "m_catch", "m_ypr", "m_ypc",
         *[f"{n}_s" for n in ("tgt_share", "rz_tgt_share", "car_share", "rz_car_share",
