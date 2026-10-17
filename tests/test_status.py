@@ -177,3 +177,28 @@ def test_build_passes_report_state_to_availability(monkeypatch):
 
     src = inspect.getsource(inputs.build)
     assert 'final=r["final_report"]' in src and 'prev_out=r["prev_out"]' in src
+
+
+def test_drivers_show_simulated_role_not_just_usual_share():
+    """Regression: a backup filling in showed his backup share while the simulation gave
+    him the starter's carries."""
+    usage = {
+        "player": {"rush_att": 16.4, "rec_tgt": 3.2, "rush_td": 0.24, "rec_td": 0.09},
+        "team": {"rush_att": 27.9, "rec_tgt": 29.0, "rush_td": 0.72, "rec_td": 1.0},
+        "absent_car": ["Saquon Barkley (1% to play)"], "absent_tgt": [],
+    }  # fmt: skip
+    lines = startsit._usage_lines({"car_share_s": 0.399, "tgt_share_s": 0.089}, "RB", usage)
+    assert lines[0] == ("Projected 16.4 carries, 59% of the team's rushing attempts with "
+                        "Saquon Barkley (1% to play) unlikely to play (usual share of designed "
+                        "runs 39.9%)")  # fmt: skip
+    assert lines[1] == "Projected rushing TDs: 0.24 of the team's 0.72 (33%)"
+    assert lines[2].startswith("Projected 3.2 targets, 11% of team targets (usual share 8.9%)")
+
+
+def test_api_drivers_include_simulated_volume(warehouse):  # noqa: F811
+    from ffa.scoring.rules import default_rules
+    from ffa.warehouse import duck
+
+    w = startsit.load_week(duck.connect(warehouse), 2026, 6, ["00-A"])
+    v = startsit.player_views(w, default_rules())["00-A"]
+    assert any(d.startswith("Projected ") and "carries" in d for d in v.drivers)

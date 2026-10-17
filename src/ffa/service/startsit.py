@@ -54,6 +54,10 @@ class Week:
     sims: pl.DataFrame  # simulated stat lines for the requested players
     inputs: pl.DataFrame  # model inputs per player
     teams: pl.DataFrame  # game context per team
+    # Per team, mean per simulated game of carries, targets and TDs (all players), so a
+    # player's realized share can be shown; and teammates unlikely to play this week.
+    usage: pl.DataFrame | None = None
+    absent: pl.DataFrame | None = None
 
 
 @dataclass
@@ -100,11 +104,29 @@ def load_week(con, season: int, week: int, keys: list[str]) -> Week:
         ).pl()
 
     in_list = ", ".join("'" + k.replace("'", "''") + "'" for k in keys) or "''"
+    inputs = get("projection_inputs", f"and key in ({in_list})")
+    teams_in = ", ".join(f"'{t}'" for t in inputs["team"].unique().to_list()) or "''"
+    where = f"season = {int(season)} and week = {int(week)} and team in ({teams_in})"
+    usage = con.sql(
+        f"""select team, avg(ra) as rush_att, avg(tg) as rec_tgt, avg(rt) as rush_td,
+                   avg(ct) as rec_td
+            from (select team, sim, sum(rush_att) ra, sum(rec_tgt) tg, sum(rush_td) rt,
+                         sum(rec_td) ct
+                  from projection_sims where {where} group by team, sim)
+            group by team"""
+    ).pl()
+    absent = con.sql(
+        f"""select key, team, name, position, p_play, car_share_s, tgt_share_s
+            from projection_inputs
+            where {where} and p_play < 0.5
+              and (coalesce(car_share_s, 0) >= 0.15 or coalesce(tgt_share_s, 0) >= 0.12)"""
+    ).pl()
     return Week(
         season, week,
         get("projection_sims", f"and key in ({in_list})"),
-        get("projection_inputs", f"and key in ({in_list})"),
+        inputs,
         get("projection_teams"),
+        usage, absent,
     )  # fmt: skip
 
 
@@ -216,8 +238,47 @@ def injury_line(row: dict) -> str | None:
     return None
 
 
-def drivers(row: dict, team: dict | None, position: str) -> list[str]:
-    """Plain-language reasons, each with the number it rests on."""
+def _usage_lines(row: dict, position: str, usage: dict | None) -> list[str]:
+    """Carries, targets and TDs as simulated, next to the player's usual share. The
+    simulation hands an absent teammate's work to active players, so with someone out the
+    usual share understates the role; show both, and say who is out."""
+    out = []
+    car, tgt = row.get("car_share_s") or 0, row.get("tgt_share_s")
+    if not usage:  # no simulation summary: usual shares only, labelled as such
+        if position in ("RB", "QB") and car > 0.02:
+            out.append(f"Usual share of designed runs: {car * 100:.1f}%")
+        if position in ("RB", "WR", "TE") and tgt is not None:
+            out.append(f"Usual share of team targets: {tgt * 100:.1f}%")
+        return out
+    me, team = usage["player"], usage["team"]
+
+    def gone(kind: str) -> str:  # teammates out whose carries/targets are being shared
+        names = usage.get(kind) or []
+        return f" with {', '.join(names)} unlikely to play" if names else ""
+
+    def pct(a: float, b: float) -> str:
+        return f"{a / b * 100:.0f}%" if b > 0 else "n/a"
+
+    if position in ("RB", "QB") and car > 0.02:
+        share = pct(me["rush_att"], team["rush_att"])
+        out.append(f"Projected {me['rush_att']:.1f} carries, {share} of the team's rushing "
+                   f"attempts{gone('absent_car')} (usual share of designed runs "
+                   f"{car * 100:.1f}%)")  # fmt: skip
+        out.append(f"Projected rushing TDs: {me['rush_td']:.2f} of the team's "
+                   f"{team['rush_td']:.2f} ({pct(me['rush_td'], team['rush_td'])})")  # fmt: skip
+    if position in ("RB", "WR", "TE") and tgt is not None:
+        share = pct(me["rec_tgt"], team["rec_tgt"])
+        out.append(f"Projected {me['rec_tgt']:.1f} targets, {share} of team targets"
+                   f"{gone('absent_tgt')} (usual share {tgt * 100:.1f}%)")  # fmt: skip
+        out.append(f"Projected receiving TDs: {me['rec_td']:.2f} of the team's "
+                   f"{team['rec_td']:.2f} ({pct(me['rec_td'], team['rec_td'])})")  # fmt: skip
+    return out
+
+
+def drivers(row: dict, team: dict | None, position: str,
+            usage: dict | None = None) -> list[str]:  # fmt: skip
+    """Plain-language reasons, each with the number it rests on. `usage` holds what the
+    simulation actually gave the player and his team (see `_usage_lines`)."""
     out = []
     if team:
         # spread_for is the team's expected margin (positive = favored). Written out in
@@ -233,12 +294,7 @@ def drivers(row: dict, team: dict | None, position: str) -> list[str]:
     line = injury_line(row)
     if line:
         out.append(line)
-    if position in ("RB", "QB") and (row.get("car_share_s") or 0) > 0.02:
-        out.append(f"Expected share of designed runs: {row['car_share_s'] * 100:.1f}% "
-                   f"(red zone {row['rz_car_share_s'] * 100:.1f}%)")  # fmt: skip
-    if position in ("RB", "WR", "TE") and row.get("tgt_share_s") is not None:
-        out.append(f"Expected share of team targets: {row['tgt_share_s'] * 100:.1f}% "
-                   f"(red zone {row['rz_tgt_share_s'] * 100:.1f}%)")  # fmt: skip
+    out += _usage_lines(row, position, usage)
     if position == "QB" and row.get("db_share_s") is not None:
         out.append(f"Expected share of team dropbacks: {row['db_share_s'] * 100:.0f}%")
     if position in ("WR", "TE", "RB") and row.get("catch_rate_s") is not None:
@@ -260,6 +316,36 @@ def drivers(row: dict, team: dict | None, position: str) -> list[str]:
     return out
 
 
+def _usage(g: pl.DataFrame, team: str, key: str, usage: dict, absent) -> dict | None:
+    """The player's simulated volume (in games he plays) and his team's, for drivers."""
+    if team not in usage:
+        return None
+    played = g.filter(pl.col("active")) if "active" in g.columns else g
+    played = played if played.height else g
+    me = {c: float(played[c].mean()) for c in ("rush_att", "rec_tgt", "rush_td", "rec_td")
+          if c in played.columns}  # fmt: skip
+    if len(me) < 4:
+        return None
+
+    def names(col: str, floor: float) -> list[str]:
+        if absent is None:
+            return []
+        rows = absent.filter(
+            (pl.col("team") == team) & (pl.col("key") != key)
+            & (pl.col(col).fill_null(0) >= floor)
+        )  # fmt: skip
+        return [
+            f"{r['name']} ({r['p_play'] * 100:.0f}% to play)" for r in rows.iter_rows(named=True)
+        ]
+
+    return {
+        "player": me,
+        "team": usage[team],
+        "absent_car": names("car_share_s", 0.15),
+        "absent_tgt": names("tgt_share_s", 0.12),
+    }
+
+
 def player_views(w: Week, rules: ScoringRules) -> dict[str, PlayerView]:
     if w.sims.height == 0:
         return {}
@@ -268,6 +354,8 @@ def player_views(w: Week, rules: ScoringRules) -> dict[str, PlayerView]:
     n = int(w.sims["sim"].max()) + 1
     inputs = {r["key"]: r for r in w.inputs.iter_rows(named=True)}
     teams = {r["team"]: r for r in w.teams.iter_rows(named=True)}
+    usage = {r["team"]: r for r in w.usage.iter_rows(named=True)} if w.usage is not None else {}
+    absent = w.absent if w.absent is not None else None
     views = {}
     for (key,), g in w.sims.group_by("key"):
         meta = g.row(0, named=True)
@@ -293,7 +381,8 @@ def player_views(w: Week, rules: ScoringRules) -> dict[str, PlayerView]:
             expected_stats={STAT_LABELS[s]: round(float(g[s].mean()), 2)
                             for s in POSITION_STATS.get(pos, []) if s in g.columns},
             points_by_rule={t: round(float(p), 2) for t, p in rule_pts.iter_rows()},
-            drivers=drivers(row | {"team": meta["team"]}, team, pos),
+            drivers=drivers(row | {"team": meta["team"]}, team, pos,
+                            _usage(g, meta["team"], key, usage, absent)),
         )  # fmt: skip
     return views
 

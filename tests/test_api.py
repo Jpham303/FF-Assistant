@@ -56,6 +56,9 @@ def warehouse(tmp_path):
     store.write(_sims().with_columns(*tag), root, "projection_sims")
     inputs = pl.DataFrame({
         "key": [p[0] for p in PLAYERS],
+        "name": [p[1] for p in PLAYERS],
+        "team": [p[2] for p in PLAYERS],
+        "position": [p[3] for p in PLAYERS],
         "opponent": ["GB" if p[2] == "DAL" else "HOU" for p in PLAYERS],
         "p_play": [1.0, 0.8, 1.0, 1.0, 1.0],
         "injury_status": [None, "Questionable", None, None, None],
@@ -162,7 +165,7 @@ def test_drivers_carry_numbers_and_size_matchups():
     team = {"implied": 26.0, "opponent": "JAX", "spread_for": -1.5, "total_line": 50.0,
             "mu_plays": 64.0, "p_pass": 0.6}  # fmt: skip
     d = startsit.drivers(row, team, "RB")
-    assert d[1].startswith("Expected share of designed runs: 50.0%")  # rushing role first
+    assert d[1].startswith("Usual share of designed runs: 50.0%")  # rushing role first
     m = [x for x in d if x.startswith("Matchup")]
     assert m and "8% fewer yards per carry against JAX" in m[0]
     assert d[0].startswith("DAL is a 1.5-point underdog vs JAX (total 50.0), implied to score")
