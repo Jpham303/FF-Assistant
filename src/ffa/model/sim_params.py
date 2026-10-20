@@ -24,6 +24,11 @@ import statsmodels.api as sm
 STARTER_SNAP_PCT = 0.30  # "role" threshold for availability
 
 
+# Chosen on 2024 (2023 as a check) from {0, 0.5, 0.75, 1}: removes most of the ~1 point
+# under-projection of players taking over a ruled-out starter's role and lowers RMSE; see
+# docs/evaluation_2025.md "Changes after the holdout" and issue #1.
+INHERIT_KEEP = 0.5
+
 PENDING_PRACTICE = frozenset({
     "Did Not Participate In Practice", "Limited Participation in Practice",
 })  # fmt: skip
@@ -39,7 +44,7 @@ class SimParams:
     p_play: dict[str, float] = field(default_factory=dict)  # "status|practice|role"
     # Share of an absent player's work that stays with his position group (0 = spread
     # across all active teammates by their shares). Chosen by backtest; see issue #1.
-    inherit_keep: float = 0.0
+    inherit_keep: float = INHERIT_KEEP
     rec_yd_shape: float = 1.0
     rush_yd_sd: float = 5.0
     target_concentration: float = 50.0

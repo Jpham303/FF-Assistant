@@ -229,3 +229,35 @@ def test_inheritance_moves_an_absent_starters_role_to_his_position():
     p0 = _propensity(td, shares, active, pos, 0.0)[:, 0]
     p1 = _propensity(td, shares, active, pos, 1.0)[:, 0]
     assert p1[1] > p0[1] and np.isclose(p1[2], p0[2])
+
+
+def test_inheritance_is_on_by_default_and_reaches_old_param_files(tmp_path):
+    import json
+
+    from ffa.model.sim_params import INHERIT_KEEP
+
+    assert INHERIT_KEEP == 0.5 and SimParams().inherit_keep == 0.5
+    f = tmp_path / "sim_params.json"  # fitted before the field existed
+    f.write_text(json.dumps({"p_play": {}}))
+    assert SimParams.load(f).inherit_keep == 0.5
+
+
+def test_backup_takes_most_of_an_out_starters_goal_line_work():
+    """PHI 2026 week 6 shape: RB1 out, RB2 his backup, QB with a high TD rate per carry.
+    Shares as estimated that week."""
+    import numpy as np
+
+    from ffa.model.sim import _inherit, _propensity
+
+    pos = np.array(["RB", "QB", "RB", "RB"])  # Barkley, Hurts, Pierce, Steele
+    car = np.array([0.479, 0.094, 0.399, 0.068])
+    td = np.array([0.419, 0.342, 0.265, 0.059])
+    active = np.array([[False], [True], [True], [True]])
+    keep = SimParams().inherit_keep
+    carries = _inherit(car, active, pos, keep)[:, 0]
+    rate = _propensity(td, car, active, pos, keep)[:, 0]
+    td_weight = carries * rate  # expected TD weight per player
+    old = _inherit(car, active, pos, 0.0)[:, 0] * _propensity(td, car, active, pos, 0.0)[:, 0]
+    pierce, hurts = 2, 1
+    assert td_weight[pierce] / td_weight.sum() > old[pierce] / old.sum()
+    assert td_weight[pierce] > td_weight[hurts]

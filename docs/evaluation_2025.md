@@ -87,6 +87,26 @@ Well calibrated, slightly overconfident above 70%.
   holdout used final reports, where this rule does not apply (it touches 2 of 8,602
   2025 player-weeks), so the results above stand.
 
+- **Role inheritance (Oct 2026, [issue #1](https://github.com/Jpham303/FF-Assistant/issues/1)).**
+  A starter ruled out used to vanish from the model, and his work was spread over all
+  teammates by share (a quarterback picked up much of a running back's goal-line work).
+  Recently absent players now stay in at 0% to play, and half of their carries,
+  targets and TD share stays with their position group (`INHERIT_KEEP = 0.5`, chosen on
+  2024 from 0 / 0.5 / 0.75 / 1, checked on 2023). Players taking over a starter's role:
+
+  | | Before | After |
+  | --- | --- | --- |
+  | Bias, 2024 / 2023 | −1.09 / −1.08 pts | −0.32 / −0.46 |
+  | RMSE, 2024 / 2023 | 5.77 / 5.82 | 5.67 / 5.74 |
+  | MAE, 2024 | 3.95 | 4.02 (+0.07 [−0.04, +0.19]) |
+
+  All players' MAE moved −0.010 [−0.023, +0.002] in 2024 and −0.012 [−0.020, −0.004] in
+  2023; start/sit accuracy on pairs involving these players +0.1 / +0.8 points (not
+  significant). **The acceptance rule set beforehand (their MAE must improve) was not
+  met.** The change shipped anyway, as a judgment recorded here: projections are means of
+  right-skewed outcomes, for which bias and RMSE are the right measures and MAE rewards
+  projecting low. Phase 3 re-tests it with bias and RMSE fixed as the criteria in advance.
+
 ## Known limitations (for Phase 3)
 
 - Win probabilities above 70% run 2–4 points high; recalibrate on 2024 and recheck.

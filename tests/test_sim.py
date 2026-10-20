@@ -128,11 +128,12 @@ def test_touchdowns_need_a_touch(lines):
 
 
 def test_injured_teammates_share_goes_to_active_players(lines):
-    # WR2 (0.20) is out: WR1 and RB1 split it in proportion to 0.30 and 0.10.
+    # WR2 (0.20) is out. Half of it stays with the WRs (INHERIT_KEEP = 0.5): WR1 0.30 +
+    # 0.10 = 0.40; the rest is spread by share over WR1 (0.40) and RB1 (0.10) -> 4 : 1.
     tgt = wide(lines, "rec_tgt")
-    assert tgt["A_WR1"].mean() / tgt["A_RB1"].mean() == pytest.approx(3.0, rel=0.1)
+    assert tgt["A_WR1"].mean() / tgt["A_RB1"].mean() == pytest.approx(4.0, rel=0.1)
     team_targets = 64 * 0.6 * 0.85
-    assert tgt["A_WR1"].mean() == pytest.approx(team_targets * 0.98 * 0.75, rel=0.12)
+    assert tgt["A_WR1"].mean() == pytest.approx(team_targets * 0.98 * 0.8, rel=0.12)
 
 
 def test_kicking_uses_latest_completed_season(lines):
