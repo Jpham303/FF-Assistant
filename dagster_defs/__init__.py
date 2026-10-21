@@ -3,6 +3,7 @@
 No `from __future__ import annotations` here: Dagster inspects the real type of `context`.
 """
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
@@ -10,14 +11,17 @@ from dagster import (
     AssetExecutionContext,
     AssetSelection,
     DefaultScheduleStatus,
+    DefaultSensorStatus,
     Definitions,
     MaterializeResult,
     RunRequest,
     ScheduleEvaluationContext,
+    SensorEvaluationContext,
     StaticPartitionsDefinition,
     asset,
     define_asset_job,
     schedule,
+    sensor,
 )
 
 from ffa import features
@@ -34,6 +38,9 @@ from ffa.model import team as team_model
 from ffa.scoring.defense import dst_stat_lines
 from ffa.scoring.defense import load_pbp as load_dst_pbp
 from ffa.service import projections as projections_mod
+from ffa.tracking import actuals as actuals_mod
+from ffa.tracking import report as report_mod
+from ffa.tracking import snapshots
 from ffa.warehouse import duck, store
 
 FIRST_SEASON = 2015
@@ -483,9 +490,33 @@ def weekly_projections(context: AssetExecutionContext) -> MaterializeResult:
         con = duck.connect(settings.warehouse_dir)
     models = projections_mod.load_models(settings.models_dir)
     r = projections_mod.run_week(con, settings.warehouse_dir, models, season, week)
+    # Freeze what was just projected (skipped when identical to the last snapshot).
+    path, rows = snapshots.take(
+        duck.connect(settings.warehouse_dir), settings.warehouse_dir, settings.models_dir,
+        season, week, _league_scoring(context.log),
+    )  # fmt: skip
     return MaterializeResult(
-        metadata={"season": r.season, "week": r.week, "players": r.players, "rows": r.rows}
+        metadata={
+            "season": r.season,
+            "week": r.week,
+            "players": r.players,
+            "rows": r.rows,
+            "snapshot": path.name if path else "unchanged (not written)",
+            "snapshot_rows": rows,
+        }  # fmt: skip
     )
+
+
+def _league_scoring(log) -> dict[str, dict]:
+    try:
+        db = db_session()
+    except Exception as exc:
+        log.warning(f"App database unavailable; snapshot uses standard scoring only: {exc}")
+        return snapshots.leagues_scoring(None)
+    try:
+        return snapshots.leagues_scoring(db)
+    finally:
+        db.close()
 
 
 projections_job = define_asset_job(
@@ -504,6 +535,90 @@ def hourly_projections(context: ScheduleEvaluationContext):
     return RunRequest(run_key=f"projections-{context.scheduled_execution_time}")
 
 
+# ---------------------------------------------------------------- live accuracy tracking
+
+
+PRE_KICKOFF = timedelta(minutes=45)
+
+
+def _now() -> datetime:  # a seam for tests
+    return datetime.now(UTC)
+
+
+@sensor(job=projections_job, minimum_interval_seconds=300,
+        default_status=DefaultSensorStatus.RUNNING)  # fmt: skip
+def pre_kickoff_snapshot(context: SensorEvaluationContext):
+    """Fresh projections and a frozen snapshot ~45 minutes before each kickoff window
+    (Thursday, London, Sunday early/late/night, Monday). A missed snapshot means that
+    window can never be scored fairly."""
+    con = duck.connect(settings.warehouse_dir, datasets=["schedules"])
+    season = settings.current_season
+    week = projections_mod.upcoming_week(con, season)
+    if week is None:
+        return
+    now = _now()
+    for ko in sorted(set(snapshots.kickoffs(con, season, week)["kickoff"].to_list())):
+        if ko - PRE_KICKOFF <= now < ko:
+            yield RunRequest(run_key=f"prekick-{ko.isoformat()}")
+
+
+@asset(group_name="tracking", deps=["player_stats", "pbp", "schedules", "player_games"])
+def actuals(context: AssetExecutionContext) -> MaterializeResult:
+    """Stat lines, snaps and an active flag for every completed week this season (redone
+    on Tuesday and Wednesday to pick up nflverse stat corrections)."""
+    con = duck.connect(settings.warehouse_dir)
+    season = settings.current_season
+    weeks = actuals_mod.completed_weeks(con, season)
+    if not weeks:
+        return MaterializeResult(metadata={"weeks": "none"})
+    df = actuals_mod.build(con, season, weeks)
+    store.write(df, settings.warehouse_dir, actuals_mod.DATASET)
+    return MaterializeResult(metadata={"weeks": str(weeks), "rows": df.height})
+
+
+@asset(group_name="tracking", deps=["actuals"])
+def eval_results(context: AssetExecutionContext) -> MaterializeResult:
+    """Score every completed week against its last pre-kickoff snapshots, and write the
+    weekly report to data/reports/."""
+    con = duck.connect(settings.warehouse_dir)
+    season = settings.current_season
+    weeks = actuals_mod.completed_weeks(con, season)
+    try:
+        act = con.sql(f"select * exclude (_ingested_at) from actuals where season = {season}").pl()
+    except Exception:
+        return MaterializeResult(metadata={"weeks": "no actuals yet"})
+    scored = []
+    for w in weeks:
+        res = report_mod.score_week(settings.warehouse_dir, act, season, w)
+        if res.height:
+            store.write(res, settings.warehouse_dir, report_mod.RESULTS)
+            scored.append(res)
+    if not scored:
+        return MaterializeResult(metadata={"weeks_scored": "none (no snapshots before kickoff)"})
+    allres = pl.concat(scored)
+    last = max(allres["week"].to_list())
+    reports = Path(settings.warehouse_dir).parent / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    out = reports / f"accuracy_{season}_week{last:02d}.md"
+    out.write_text(report_mod.markdown(allres, season, last))
+    return MaterializeResult(metadata={
+        "weeks_scored": str(sorted(allres["week"].unique().to_list())), "report": str(out),
+    })  # fmt: skip
+
+
+tracking_job = define_asset_job(
+    "tracking_refresh", selection=AssetSelection.assets("actuals", "eval_results")
+)
+
+
+# Tuesday and Wednesday mornings, after the nightly nflverse and features refresh, so
+# stat corrections are in.
+@schedule(job=tracking_job, cron_schedule="30 5 * * 2,3", execution_timezone="America/Chicago",
+          default_status=DefaultScheduleStatus.RUNNING)  # fmt: skip
+def weekly_tracking(context: ScheduleEvaluationContext):
+    return RunRequest(run_key=f"tracking-{context.scheduled_execution_time}")
+
+
 defs = Definitions(
     assets=[
         *ingest_assets,
@@ -517,6 +632,8 @@ defs = Definitions(
         matchup_model,
         sim_params,
         weekly_projections,
+        actuals,
+        eval_results,
     ],
     jobs=[
         nflverse_job,
@@ -526,6 +643,7 @@ defs = Definitions(
         features_job,
         projections_job,
         status_job,
+        tracking_job,
     ],
     schedules=[
         nightly_current_season,
@@ -536,5 +654,7 @@ defs = Definitions(
         hourly_projections,
         daily_status,
         sunday_status,
+        weekly_tracking,
     ],
+    sensors=[pre_kickoff_snapshot],
 )

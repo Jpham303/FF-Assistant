@@ -124,6 +124,7 @@ def test_more_severe_source_wins_and_is_credited():
 def _view(key, name, mean, p_play, status=None, pos="RB"):
     return startsit.PlayerView(
         key=key, name=name, team="PHI", position=pos, opponent="CAR", mean=mean,
+        mean_if_active=mean,
         median=mean, p10=0, p90=mean * 2, play_probability=p_play, injury_status=status,
         injury_source="Sleeper" if status else None, injury_updated_at="Fri Oct 16 4:12 PM CDT",
         injury_fetched_at="Fri Oct 16 5:05 PM CDT", expected_stats={}, points_by_rule={},
@@ -314,6 +315,8 @@ def test_projection_run_fetches_sleeper_when_missing(tmp_path, monkeypatch):
         d.projections_mod, "run_week",
         lambda *a, **k: d.projections_mod.RunResult(2026, 7, 1, 1),
     )  # fmt: skip
+    monkeypatch.setattr(d.snapshots, "take", lambda *a, **k: (None, 0))
+    monkeypatch.setattr(d, "_league_scoring", lambda log: {})
     d.weekly_projections(dg.build_asset_context())
     assert calls == [1]  # never fetched -> fetched
     (tmp_path / "dims").mkdir()

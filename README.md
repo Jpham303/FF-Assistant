@@ -195,6 +195,21 @@ format change, regenerate stored weeks: `uv run ffa rebuild-projections --dry-ru
 them, without `--dry-run` rebuilds them (projection_history, the record of what was
 projected at the time, is left as it was).
 
+## Live accuracy tracking
+
+Every week is scored against projections frozen before kickoff (spec: *FF Assistant —
+Projection Evaluation Spec*, Phase 1).
+
+| Piece | What it does |
+| --- | --- |
+| `projection_snapshots` | Written by every projection run, never overwritten (a new snapshot only when the forecast changed). Per player and league scoring: `expected_points`, `proj_if_active`, p10/p25/p50/p75/p90 and 21 quantiles, play probability, injury status with source and time, kickoff, model version (hash of the fitted files), git commit, and the scoring rules used |
+| `pre_kickoff_snapshot` sensor | Fresh projections and a snapshot ~45 minutes before each kickoff window (Thursday, London, Sunday, Monday) |
+| `actuals` | Stat lines, snaps and an active flag per player-week; Tuesday and Wednesday 5:30 AM CT (after stat corrections) |
+| `eval_results` | Each player scored against the last snapshot taken before his kickoff: MAE if active, MAE on expected points, bias, p10–p90 and p25–p75 coverage, by position, against last-4 and season-average baselines on the same players; writes `data/reports/accuracy_<season>_week<NN>.md` |
+
+`uv run ffa report [--week N]` prints the report. To record the git commit in snapshots,
+build with `FFA_GIT_SHA` set (PowerShell: `$env:FFA_GIT_SHA = git rev-parse --short HEAD`).
+
 ## Use it from Claude (MCP)
 
 `ffa-mcp` is an MCP server that gives AI assistants six read-only tools over the API:

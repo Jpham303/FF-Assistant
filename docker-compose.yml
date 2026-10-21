@@ -2,7 +2,10 @@
 name: ff-assistant
 
 x-app: &app
-  build: .
+  build:
+    context: .
+    args:
+      GIT_SHA: ${FFA_GIT_SHA:-unknown}  # set FFA_GIT_SHA before building to record it
   env_file: .env
   volumes: [./data:/data]
   depends_on:

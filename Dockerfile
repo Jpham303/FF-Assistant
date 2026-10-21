@@ -14,5 +14,7 @@ COPY dagster.yaml workspace.yaml alembic.ini ./
 COPY migrations ./migrations
 RUN uv sync --frozen --no-dev
 
-ENV PATH="/app/.venv/bin:$PATH" DAGSTER_HOME=/app/.dagster_home
+# Recorded in every projection snapshot: docker compose build --build-arg GIT_SHA=$(git rev-parse --short HEAD)
+ARG GIT_SHA=unknown
+ENV PATH="/app/.venv/bin:$PATH" DAGSTER_HOME=/app/.dagster_home FFA_GIT_SHA=$GIT_SHA
 RUN mkdir -p $DAGSTER_HOME && cp dagster.yaml $DAGSTER_HOME/

@@ -6,6 +6,7 @@ ffa sync sleeper <league_id> --dry-run same, without writing to the database
 ffa check-scoring sleeper <league_id>  our points vs Sleeper's, every completed week
 ffa evaluate --season 2025 --scoring s.json   holdout accuracy vs baselines
 ffa rebuild-projections --dry-run      stored weeks whose files are in an old format
+ffa report [--week N]                  projection accuracy vs baselines, from frozen data
 """
 
 from __future__ import annotations
@@ -187,6 +188,22 @@ def _rebuild_projections(args: argparse.Namespace) -> int:
     return 0
 
 
+def _report(args: argparse.Namespace) -> int:
+    """Print the accuracy report for a week from stored eval_results."""
+    from ffa.tracking import report as rep
+    from ffa.warehouse import duck
+
+    con = duck.connect(settings.warehouse_dir, datasets=[rep.RESULTS])
+    try:
+        res = con.sql(f"select * from {rep.RESULTS} where season = {args.season}").pl()
+    except Exception:
+        print("No scored weeks yet (eval_results runs Tuesday and Wednesday mornings).")
+        return 1
+    week = args.week or int(res["week"].max())
+    print(rep.markdown(res.filter(res["week"] <= week), args.season, week))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ffa")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -225,6 +242,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--all", action="store_true", help="rebuild every stored week")
     p.add_argument("--dry-run", action="store_true", help="only list what would be rebuilt")
     p.set_defaults(func=_rebuild_projections)
+
+    p = sub.add_parser("report", help="projection accuracy report for a scored week")
+    p.add_argument("--season", type=int, default=settings.current_season)
+    p.add_argument("--week", type=int, help="default: latest scored week")
+    p.set_defaults(func=_report)
 
     args = parser.parse_args(argv)
     return args.func(args)

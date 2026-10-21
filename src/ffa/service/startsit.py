@@ -70,6 +70,7 @@ class PlayerView:
     opponent: str | None
     mean: float
     median: float
+    mean_if_active: float | None
     p10: float
     p90: float
     play_probability: float
@@ -360,6 +361,15 @@ def _usage(g: pl.DataFrame, team: str, key: str, usage: dict, absent) -> dict | 
     }
 
 
+def _if_active(pts: pl.DataFrame, g: pl.DataFrame, key: str) -> float | None:
+    """Mean points in the simulations where he plays (the plays-only projection)."""
+    if "active" not in g.columns:
+        return None
+    act = g.filter(pl.col("active").fill_null(True)).select("sim")
+    p = pts.filter(pl.col("key") == key).join(act, on="sim", how="semi")["fpts"]
+    return float(p.mean()) if p.len() else None
+
+
 def player_views(w: Week, rules: ScoringRules) -> dict[str, PlayerView]:
     if w.sims.height == 0:
         return {}
@@ -385,6 +395,7 @@ def player_views(w: Week, rules: ScoringRules) -> dict[str, PlayerView]:
             key=key, name=meta["name"], team=meta["team"], position=pos,
             opponent=row.get("opponent") or (team or {}).get("opponent"),
             mean=float(f.mean()), median=float(f.median()),
+            mean_if_active=_if_active(pts, g, key),
             p10=float(f.quantile(0.1)), p90=float(f.quantile(0.9)),
             play_probability=float(row.get("p_play", 1.0) or 0.0),
             injury_status=row.get("injury_status"),

@@ -114,8 +114,9 @@ class Player(BaseModel):
     team: str
     position: str
     opponent: str | None
-    mean: float
+    mean: float = Field(description="Expected points, a chance of not playing included")
     median: float
+    mean_if_active: float | None = Field(None, description="Expected points if he plays")
     p10: float
     p90: float
     play_probability: float
