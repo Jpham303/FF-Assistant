@@ -1,3 +1,6 @@
+# Fixed project name: volumes keep the same names wherever the folder is (or links to).
+name: ff-assistant
+
 x-app: &app
   build: .
   env_file: .env
