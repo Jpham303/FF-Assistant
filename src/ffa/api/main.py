@@ -21,7 +21,7 @@ from ffa.config import settings
 from ffa.db.models import LeagueRow, RosterEntryRow, TeamRow
 from ffa.scoring.rules import ScoringRules, default_rules, from_sleeper
 from ffa.service import availability, startsit
-from ffa.service.projections import upcoming_week
+from ffa.service.projections import latest_sleeper_status, upcoming_week
 from ffa.warehouse import duck
 
 app = FastAPI(
@@ -236,14 +236,8 @@ def week_info(con=Depends(get_con)) -> WeekInfo:
     if w is None:
         return info
 
-    def latest(table: str):
-        try:
-            return con.sql(
-                f"select max(_ingested_at) from {table} where season = {season} and week = {w}"
-            ).fetchone()[0]
-        except duckdb.Error:
-            return None
-
+    # Only "no data yet" maps to null; any other error surfaces instead of reading as
+    # "never fetched".
     try:
         info.projections_generated_at = con.sql(
             f"select max(_ingested_at) from {duck.week(con, 'projection_sims', season, w)}"
@@ -251,8 +245,18 @@ def week_info(con=Depends(get_con)) -> WeekInfo:
     except duck.MissingPartition:
         info.projections_generated_at = None
     info.projections_available = info.projections_generated_at is not None
-    info.nflverse_injuries_fetched_at = latest("injuries")
-    info.sleeper_status_fetched_at = latest("sleeper_status")
+    try:
+        info.nflverse_injuries_fetched_at = con.sql(
+            f"select max(_ingested_at) from {duck.week(con, 'injuries', season, w)}"
+        ).fetchone()[0]
+    except duck.MissingPartition:  # this week's report not published yet: last week's
+        try:
+            info.nflverse_injuries_fetched_at = con.sql(
+                f"select max(_ingested_at) from {duck.week(con, 'injuries', season, w - 1)}"
+            ).fetchone()[0]
+        except duck.MissingPartition:
+            info.nflverse_injuries_fetched_at = None
+    info.sleeper_status_fetched_at = latest_sleeper_status(con, season, w)[1]
     return info
 
 

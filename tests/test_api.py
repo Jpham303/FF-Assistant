@@ -318,3 +318,22 @@ def test_inputs_format_check_names_every_problem():
         check_inputs(bad)
     msg = str(e.value)
     assert "p_play: String" in msg and "roster_status: missing" in msg
+
+
+def test_week_reports_sleeper_fetch_even_if_filed_under_last_week(warehouse, client):
+    """Regression: /week said Sleeper was never fetched although its data was there
+    (the API never opened that dataset, and the error read as 'never fetched')."""
+    from datetime import UTC, datetime
+
+    assert client.get("/week").json()["sleeper_status_fetched_at"] is None  # truly never
+    fetched = datetime(2026, 10, 21, 20, 10, tzinfo=UTC)
+    st = pl.DataFrame({"key": ["00-A"], "status": ["Out"], "season": [SEASON], "week": [WEEK - 1]})
+    st = st.with_columns(pl.col("season", "week").cast(pl.Int32))
+    store.write(st, warehouse, "sleeper_status", volatile=True, ingested_at=fetched)
+    got = client.get("/week").json()["sleeper_status_fetched_at"]
+    assert got is not None and datetime.fromisoformat(got) == fetched
+
+    from ffa.service.projections import latest_sleeper_status
+
+    df, when = latest_sleeper_status(duck.connect(warehouse), SEASON, WEEK)
+    assert when == fetched and df["key"].to_list() == ["00-A"]  # projections use it too

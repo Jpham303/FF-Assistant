@@ -77,13 +77,25 @@ def upcoming_week(con, season: int) -> int | None:
     return int(row[0]) if row and row[0] is not None else None
 
 
+def latest_sleeper_status(con, season: int, week: int):
+    """The most recent Sleeper status snapshot that applies to `week`: statuses are the
+    current state, so a fetch filed under the previous week (e.g. Monday morning, before
+    Monday night's game) still applies. Returns (frame, fetched_at) or (None, None)."""
+    for w in (week, week - 1):
+        if w < 1:
+            continue
+        try:
+            t = duck.week(con, "sleeper_status", season, w)
+        except duck.MissingPartition:
+            continue
+        df = con.sql(f"select * from {t}").pl()
+        fetched = df["_ingested_at"].max() if "_ingested_at" in df.columns and df.height else None
+        return df.drop("_ingested_at", strict=False), fetched
+    return None, None
+
+
 def _sleeper_status(con, season: int, week: int) -> pl.DataFrame | None:
-    """Latest Sleeper status snapshot for the week, if one has been fetched."""
-    try:
-        t = duck.week(con, "sleeper_status", season, week)
-        return con.sql(f"select * exclude (_ingested_at) from {t}").pl()
-    except duck.MissingPartition:  # not fetched yet: nflverse alone
-        return None
+    return latest_sleeper_status(con, season, week)[0]
 
 
 @dataclass
