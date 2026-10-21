@@ -5,6 +5,7 @@ ffa sync sleeper <league_id>           fetch, resolve and store a league; print 
 ffa sync sleeper <league_id> --dry-run same, without writing to the database
 ffa check-scoring sleeper <league_id>  our points vs Sleeper's, every completed week
 ffa evaluate --season 2025 --scoring s.json   holdout accuracy vs baselines
+ffa rebuild-projections --dry-run      stored weeks whose files are in an old format
 """
 
 from __future__ import annotations
@@ -151,6 +152,41 @@ def _evaluate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _rebuild_projections(args: argparse.Namespace) -> int:
+    """Regenerate stored weeks whose projection files are in an older format. Rewrites
+    projection_sims / _inputs / _teams for those weeks; projection_history (what was
+    projected at the time) is left untouched."""
+    from pathlib import Path
+
+    import polars as pl
+
+    from ffa.service import projections as proj
+    from ffa.warehouse import duck
+
+    root = Path(settings.warehouse_dir) / "projection_inputs" / f"season={args.season}"
+    stored = sorted(int(d.name.split("=")[1]) for d in root.glob("week=*") if d.is_dir())
+    stale = []
+    for w in stored:
+        files = sorted((root / f"week={w:02d}").glob("*.parquet"))
+        try:
+            proj.check_inputs(pl.read_parquet(files[-1], n_rows=0))
+        except proj.SchemaMismatch as e:
+            stale.append((w, str(e)))
+    weeks = stored if args.all else [w for w, _ in stale]
+    print(f"{args.season}: stored weeks {stored}; old format: {[w for w, _ in stale] or 'none'}")
+    for w, why in stale:
+        print(f"  week {w}: {why}")
+    if args.dry_run or not weeks:
+        return 0
+    models = proj.load_models(settings.models_dir)
+    for w in weeks:
+        con = duck.connect(settings.warehouse_dir)
+        r = proj.run_week(con, settings.warehouse_dir, models, args.season, w,
+                          record_history=False)  # fmt: skip
+        print(f"  rebuilt week {w}: {r.players} players")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ffa")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -180,6 +216,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--scoring", required=True, help="league scoring settings JSON (Sleeper)")
     p.add_argument("--sims", type=int, default=1000)
     p.set_defaults(func=_evaluate)
+
+    p = sub.add_parser(
+        "rebuild-projections",
+        help="regenerate stored weeks whose projection files are in an old format",
+    )
+    p.add_argument("--season", type=int, default=settings.current_season)
+    p.add_argument("--all", action="store_true", help="rebuild every stored week")
+    p.add_argument("--dry-run", action="store_true", help="only list what would be rebuilt")
+    p.set_defaults(func=_rebuild_projections)
 
     args = parser.parse_args(argv)
     return args.func(args)

@@ -232,7 +232,12 @@ def week_info(con=Depends(get_con)) -> WeekInfo:
         except duckdb.Error:
             return None
 
-    info.projections_generated_at = latest("projection_sims")
+    try:
+        info.projections_generated_at = con.sql(
+            f"select max(_ingested_at) from {duck.week(con, 'projection_sims', season, w)}"
+        ).fetchone()[0]
+    except duck.MissingPartition:
+        info.projections_generated_at = None
     info.projections_available = info.projections_generated_at is not None
     info.nflverse_injuries_fetched_at = latest("injuries")
     info.sleeper_status_fetched_at = latest("sleeper_status")

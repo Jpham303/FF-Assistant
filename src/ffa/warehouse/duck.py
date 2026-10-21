@@ -23,6 +23,7 @@ def connect(
     callers that need only a few tables (the API) should name them."""
     root = Path(root)
     con = duckdb.connect(database)
+    _ROOTS[id(con)] = root
     dirs = sorted(p for p in root.iterdir() if p.is_dir()) if root.exists() else []
     if datasets is not None:
         wanted = set(datasets)
@@ -67,3 +68,30 @@ def as_of(
         """,
         params={"cutoff": cutoff},
     )
+
+
+_ROOTS: dict[int, Path] = {}
+
+
+class MissingPartition(LookupError):
+    """No files for this dataset, season and week."""
+
+
+def week(con: duckdb.DuckDBPyConnection, dataset: str, season: int, week: int) -> str:
+    """A SQL table expression over ONE week's files of `dataset` (latest snapshot).
+
+    Use this, not the all-weeks view, when a query needs a single week: it can't be broken
+    by other weeks written in an older format. (DuckDB 1.5 mis-maps columns by position
+    when files with different column sets are scanned together with `select *` and a
+    filter, despite union_by_name.) Raises MissingPartition if the week has no files."""
+    root = _ROOTS.get(id(con))
+    if root is None:
+        raise ValueError("connection was not opened with duck.connect")
+    d = root / dataset / f"season={int(season)}" / f"week={int(week):02d}"
+    if next(d.glob("*.parquet"), None) is None:
+        raise MissingPartition(f"{dataset} {season} week {week}")
+    glob = (d / "*.parquet").as_posix().replace("'", "''")
+    return f"""(SELECT * EXCLUDE (filename) FROM read_parquet('{glob}', hive_partitioning = true,
+                    hive_types = {{'season': INTEGER, 'week': INTEGER}}, union_by_name = true,
+                    filename = true)
+               QUALIFY _ingested_at = max(_ingested_at) OVER ())"""

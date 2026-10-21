@@ -24,9 +24,39 @@ from ffa.model.player import PlayerModel
 from ffa.model.sim import simulate
 from ffa.model.sim_params import SimParams
 from ffa.model.team import TeamModel
-from ffa.warehouse import store
+from ffa.warehouse import duck, store
 
 N_SIMS = 2000
+
+# What the API reads from projection_inputs. A week whose inputs don't match fails the
+# pipeline run here rather than the API at request time.
+INPUT_SCHEMA: dict[str, type[pl.DataType] | tuple[type[pl.DataType], ...]] = {
+    "key": pl.String, "name": pl.String, "team": pl.String, "position": pl.String,
+    "opponent": pl.String, "roster_status": pl.String, "injury_status": pl.String,
+    "practice": pl.String, "injury_source": pl.String,
+    "injury_updated_at": pl.Datetime, "injury_fetched_at": pl.Datetime,
+    "prev_out": pl.Boolean, "final_report": pl.Boolean,
+    "p_play": pl.Float64, "car_share_s": pl.Float64, "tgt_share_s": pl.Float64,
+    "rz_car_share_s": pl.Float64, "rz_tgt_share_s": pl.Float64,
+}  # fmt: skip
+
+
+class SchemaMismatch(ValueError):
+    pass
+
+
+def check_inputs(players: pl.DataFrame) -> None:
+    """Raise SchemaMismatch listing every missing or mistyped column."""
+    problems = []
+    for col, want in INPUT_SCHEMA.items():
+        if col not in players.columns:
+            problems.append(f"{col}: missing")
+            continue
+        got = players.schema[col]
+        if got != pl.Null and not isinstance(got, want if isinstance(want, tuple) else (want,)):
+            problems.append(f"{col}: {got}, expected {want}")
+    if problems:
+        raise SchemaMismatch("projection_inputs format: " + "; ".join(problems))
 
 
 def load_models(models_dir: str | Path) -> Models:
@@ -50,11 +80,9 @@ def upcoming_week(con, season: int) -> int | None:
 def _sleeper_status(con, season: int, week: int) -> pl.DataFrame | None:
     """Latest Sleeper status snapshot for the week, if one has been fetched."""
     try:
-        return con.sql(
-            f"select * exclude (_ingested_at) from sleeper_status "
-            f"where season = {int(season)} and week = {int(week)}"
-        ).pl()
-    except Exception:  # not fetched yet: nflverse alone
+        t = duck.week(con, "sleeper_status", season, week)
+        return con.sql(f"select * exclude (_ingested_at) from {t}").pl()
+    except duck.MissingPartition:  # not fetched yet: nflverse alone
         return None
 
 
@@ -67,7 +95,11 @@ class RunResult:
 
 
 def run_week(con, warehouse_dir: str | Path, models: Models, season: int, week: int,
-             n: int = N_SIMS, now: datetime | None = None) -> RunResult:  # fmt: skip
+             n: int = N_SIMS, now: datetime | None = None,
+             record_history: bool = True) -> RunResult:  # fmt: skip
+    """Simulate a week and store it. `record_history=False` rebuilds the stored week
+    without adding a snapshot to projection_history (the record of what was projected
+    at the time), e.g. when regenerating past weeks in the current format."""
     q = lambda t: con.sql(f"select * from {t} where season <= {int(season)}").pl()  # noqa: E731
     inp = build(
         season=season, week=week, models=models,
@@ -76,6 +108,7 @@ def run_week(con, warehouse_dir: str | Path, models: Models, season: int, week: 
         injuries=con.sql(f"select * from injuries where season = {int(season)}").pl(),
         statuses=_sleeper_status(con, season, week),
     )  # fmt: skip
+    check_inputs(inp.players)
     lines = simulate(inp, models.sim, n=n, seed=season * 100 + week)
     tag = pl.lit(season).cast(pl.Int32).alias("season"), pl.lit(week).cast(pl.Int32).alias("week")
     f32 = [c for c, t in lines.schema.items() if t == pl.Float64]
@@ -89,5 +122,6 @@ def run_week(con, warehouse_dir: str | Path, models: Models, season: int, week: 
         .agg(pl.col(c).mean() for c in f32 if c != "active")
         .with_columns(*tag)
     )
-    store.write(summary, warehouse_dir, "projection_history", volatile=True, ingested_at=now)
+    if record_history:
+        store.write(summary, warehouse_dir, "projection_history", volatile=True, ingested_at=now)
     return RunResult(season, week, inp.players.height, lines.height)

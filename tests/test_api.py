@@ -247,3 +247,42 @@ def test_my_team(client):
     assert benched["mean"] <= slots["FLEX"]["mean"]
     assert d["not_playing"] == [f"{BYE[1]} (bye or not on an active roster)"]
     assert client.get("/leagues").json()[0]["league"] == "sleeper:1"
+
+
+def test_other_weeks_in_an_old_format_cannot_break_this_week(warehouse, client):
+    """Regression: week 7 gained roster_status ahead of a timestamp column; with an older
+    week alongside, DuckDB mapped columns by position and read p_play as a timestamp,
+    failing every request. Reproduced here with the same layout."""
+    from datetime import UTC, datetime
+
+    cur = startsit.load_week(duck.connect(warehouse), SEASON, WEEK, ["00-A", "00-B"]).inputs
+    ts = pl.lit(datetime(2026, 10, 1, tzinfo=UTC)).alias("injury_fetched_at")
+    head = ["key", "name", "team", "position", "opponent"]
+    rest = [c for c in cur.columns if c not in head]
+    new = cur.with_columns(pl.lit("ACT").alias("roster_status"), ts).select(
+        *head, "roster_status", "injury_fetched_at", *rest
+    )
+    old = new.drop("roster_status").with_columns(pl.lit(WEEK - 1).cast(pl.Int32).alias("week"))
+    store.write(new, warehouse, "projection_inputs")
+    store.write(old, warehouse, "projection_inputs")
+    w = startsit.load_week(duck.connect(warehouse), SEASON, WEEK, ["00-A", "00-B"])
+    assert set(w.inputs["key"]) == {"00-A", "00-B"}
+    assert w.inputs["p_play"].dtype == pl.Float64
+    assert client.post("/start-sit", json={"players": ["00-A", "00-B"]}).status_code == 200
+
+
+def test_missing_week_is_empty_not_an_error(warehouse):
+    w = startsit.load_week(duck.connect(warehouse), SEASON, WEEK + 3, ["00-A"])
+    assert w.sims.height == 0 and w.inputs.height == 0
+    assert all(not r["projected"] for r in startsit.search(duck.connect(warehouse), SEASON,
+                                                           WEEK + 3, "Alpha Back"))  # fmt: skip
+
+
+def test_inputs_format_check_names_every_problem():
+    from ffa.service.projections import SchemaMismatch, check_inputs
+
+    bad = pl.DataFrame({"key": ["a"], "p_play": ["0.5"]})
+    with pytest.raises(SchemaMismatch) as e:
+        check_inputs(bad)
+    msg = str(e.value)
+    assert "p_play: String" in msg and "roster_status: missing" in msg

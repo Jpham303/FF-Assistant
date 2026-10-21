@@ -21,6 +21,7 @@ from ffa.ingest.ids import normalize_name
 from ffa.leagues.base import SLOT_ELIGIBILITY
 from ffa.scoring import breakdown, score
 from ffa.scoring.rules import ScoringRules
+from ffa.warehouse import duck
 
 CLOSE_CALL = 0.55  # below this P(A beats B), call it a coin flip
 STAT_LABELS = {
@@ -97,35 +98,40 @@ class Comparison:
 
 
 def load_week(con, season: int, week: int, keys: list[str]) -> Week:
+    """Simulations, inputs and game context for `keys`, read from this week's files only."""
+    try:
+        sims_t = duck.week(con, "projection_sims", season, week)
+        inp_t = duck.week(con, "projection_inputs", season, week)
+        teams_t = duck.week(con, "projection_teams", season, week)
+    except duck.MissingPartition:
+        empty = pl.DataFrame(schema={"key": pl.Utf8, "team": pl.Utf8})
+        return Week(season, week, empty, empty, empty)
+
     def get(table: str, extra: str = "") -> pl.DataFrame:
-        return con.sql(
-            f"select * exclude (_ingested_at) from {table} where season = {int(season)} "
-            f"and week = {int(week)} {extra}"
-        ).pl()
+        return con.sql(f"select * exclude (_ingested_at) from {table} where true {extra}").pl()
 
     in_list = ", ".join("'" + k.replace("'", "''") + "'" for k in keys) or "''"
-    inputs = get("projection_inputs", f"and key in ({in_list})")
+    inputs = get(inp_t, f"and key in ({in_list})")
     teams_in = ", ".join(f"'{t}'" for t in inputs["team"].unique().to_list()) or "''"
-    where = f"season = {int(season)} and week = {int(week)} and team in ({teams_in})"
     usage = con.sql(
         f"""select team, avg(ra) as rush_att, avg(tg) as rec_tgt, avg(rt) as rush_td,
                    avg(ct) as rec_td
             from (select team, sim, sum(rush_att) ra, sum(rec_tgt) tg, sum(rush_td) rt,
                          sum(rec_td) ct
-                  from projection_sims where {where} group by team, sim)
+                  from {sims_t} where team in ({teams_in}) group by team, sim)
             group by team"""
     ).pl()
     absent = con.sql(
         f"""select key, team, name, position, p_play, car_share_s, tgt_share_s
-            from projection_inputs
-            where {where} and p_play < 0.5
+            from {inp_t}
+            where team in ({teams_in}) and p_play < 0.5
               and (coalesce(car_share_s, 0) >= 0.15 or coalesce(tgt_share_s, 0) >= 0.12)"""
     ).pl()
     return Week(
         season, week,
-        get("projection_sims", f"and key in ({in_list})"),
+        get(sims_t, f"and key in ({in_list})"),
         inputs,
-        get("projection_teams"),
+        get(teams_t),
         usage, absent,
     )  # fmt: skip
 
@@ -138,14 +144,11 @@ def search(con, season: int, week: int, query: str, position: str | None = None,
     projection this week; False on byes). Callers must not treat a close match as the
     player asked for: a bye-week player must come back as "not playing", never be swapped
     for a similar name."""
-    proj = set(
-        con.sql(
-            f"""select distinct key from projection_sims
-                where season = {int(season)} and week = {int(week)}"""
-        )
-        .pl()["key"]
-        .to_list()
-    )
+    try:
+        sims_t = duck.week(con, "projection_sims", season, week)
+        proj = set(con.sql(f"select distinct key from {sims_t}").pl()["key"].to_list())
+    except duck.MissingPartition:
+        proj = set()
     players = con.sql(
         f"""select gsis_id as key, name, team, position from player_ids
             where position in ('QB', 'RB', 'WR', 'TE', 'K') and last_season >= {int(season) - 1}"""

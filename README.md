@@ -181,6 +181,13 @@ is applied at request time. Interactive docs at http://localhost:8000/docs.
 Pass `league` (e.g. `sleeper:<league_id>`) to score with that league's settings; without
 it, `SLEEPER_LEAGUE_ID` or standard half-PPR is used.
 
+The API reads only the requested week's projection files (`duck.week`), so weeks stored in
+an older format can't affect it. Each projection run checks its inputs against the format
+the API expects (`projections.INPUT_SCHEMA`) and fails the run on a mismatch. After a
+format change, regenerate stored weeks: `uv run ffa rebuild-projections --dry-run` lists
+them, without `--dry-run` rebuilds them (projection_history, the record of what was
+projected at the time, is left as it was).
+
 ## Use it from Claude (MCP)
 
 `ffa-mcp` is an MCP server that gives AI assistants six read-only tools over the API:
