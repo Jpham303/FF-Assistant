@@ -39,7 +39,8 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    updated Fri 4:12 PM"). The model does not read news. Game statuses come from nflverse
    and from Sleeper, fetched once a day (~5 PM CT; Sunday ~10:45 AM CT), so a late scratch
    or inactive after that is not reflected: say so, and tell the user to confirm game-day
-   status before lineups lock.
+   status before lineups lock. If current_week shows sleeper_status_fetched_at as null or
+   more than a day old, say the second injury source is missing or stale.
 6. A player with no game status yet but a missed or limited practice is a real risk
    (statuses usually arrive with Friday's final report); report his play probability.
    A player ruled out is never the recommendation; say clearly that he is out.

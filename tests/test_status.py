@@ -25,7 +25,7 @@ def _injuries(rows):
     return pl.DataFrame(
         [dict(zip(cols, r, strict=True)) for r in rows],
         schema={c: pl.Int32 if c in ("season", "week") else pl.Utf8 for c in cols},
-    ).with_columns(pl.lit(FETCHED).alias("_ingested_at"))
+    ).with_columns(pl.lit(FETCHED).alias("_ingested_at"), pl.lit("PHI").alias("team"))
 
 
 BARKLEY = "00-0034844"
@@ -80,7 +80,7 @@ def test_final_report_judged_from_designations():
         (2026, 6, "b", "Questionable", LIMITED, "Knee", "Knee"),
         (2026, 6, "c", None, DNP, None, "Ankle"),
     ]).with_columns(pl.Series("team", ["PHI", "DAL", "DAL"]))  # fmt: skip
-    f = dict(_final_reports(inj, 2026, 6).iter_rows())
+    f = dict(_final_reports(inj, 2026, 6).select("team", "final_report").iter_rows())
     assert f == {"PHI": False, "DAL": True}
 
 
@@ -261,3 +261,70 @@ def test_backup_takes_most_of_an_out_starters_goal_line_work():
     pierce, hurts = 2, 1
     assert td_weight[pierce] / td_weight.sum() > old[pierce] / old.sum()
     assert td_weight[pierce] > td_weight[hurts]
+
+
+def test_last_weeks_status_carries_until_the_new_report():
+    """Regression: Monday/Tuesday, before the week's first report, a player Out last week
+    was projected at 100% (absent from this week's report read as healthy)."""
+    from ffa.model.inputs import _final_reports, _previous_status
+
+    inj = _injuries([
+        (2026, 6, "out_guy", "Out", DNP, "Knee", "Knee"),
+        (2026, 6, "q_guy", "Questionable", LIMITED, "Ankle", "Ankle"),
+        (2026, 4, "old_out", "Out", DNP, "Hand", "Hand"),  # Out in week 4, fine in week 6
+        (2026, 6, "healthy", None, "Full Participation in Practice", None, None),
+    ])  # fmt: skip
+    prev = {r["key"]: r for r in _previous_status(inj, 2026, 7).iter_rows(named=True)}
+    assert prev["out_guy"]["prev_status"] == "Out" and prev["out_guy"]["prev_week"] == 6
+    assert prev["q_guy"]["prev_status"] == "Questionable"
+    assert "old_out" not in prev and "healthy" not in prev
+    assert _final_reports(inj, 2026, 7).height == 0  # week 7 report not out: unpublished
+
+    sim = SimParams(p_play={"carry|Out|role": 0.38, "carry|Questionable|any": 0.9})
+    assert sim.play_probability(None, None, True, prev_status="Out", published=False) == 0.38
+    assert sim.play_probability(None, None, False, prev_status="Questionable",
+                                published=False) == 0.9  # fmt: skip
+    # once the team's report is out, absence from it means healthy
+    assert sim.play_probability(None, None, True, prev_status="Out", published=True) == 1.0
+    # an old parameter file without the table still doesn't say 100%
+    assert SimParams().play_probability(None, None, True, prev_status="Out",
+                                        published=False) < 0.5  # fmt: skip
+
+
+def test_carried_status_is_explained():
+    line = startsit.injury_line({"p_play": 0.31, "report_published": False,
+                                 "prev_status": "Out", "prev_week": 6})  # fmt: skip
+    assert line.startswith("No injury report yet this week; was Out in week 6 [nflverse")
+    assert "plays in 31% of simulations" in line
+
+
+def test_projection_run_fetches_sleeper_when_missing(tmp_path, monkeypatch):
+    """Regression: the Sleeper status feed never ran because its schedule was off.
+    The projection run now fetches it when missing or over a day old."""
+    import dagster as dg
+
+    import dagster_defs as d
+
+    calls = []
+    monkeypatch.setattr(d.settings, "warehouse_dir", str(tmp_path))
+    monkeypatch.setattr(d, "_fetch_sleeper_status", lambda log: calls.append(1) or {})
+    monkeypatch.setattr(d.projections_mod, "upcoming_week", lambda con, season: 7)
+    monkeypatch.setattr(d.projections_mod, "load_models", lambda path: None)
+    monkeypatch.setattr(
+        d.projections_mod, "run_week",
+        lambda *a, **k: d.projections_mod.RunResult(2026, 7, 1, 1),
+    )  # fmt: skip
+    d.weekly_projections(dg.build_asset_context())
+    assert calls == [1]  # never fetched -> fetched
+    (tmp_path / "dims").mkdir()
+    pl.DataFrame({"sleeper_id": ["1"]}).write_parquet(tmp_path / "dims" / "sleeper_players.parquet")
+    d.weekly_projections(dg.build_asset_context())
+    assert calls == [1]  # fresh -> not fetched again (Sleeper asks for once a day)
+
+
+def test_schedules_run_by_default():
+    import dagster as dg
+
+    from dagster_defs import defs
+
+    assert all(s.default_status == dg.DefaultScheduleStatus.RUNNING for s in defs.schedules)

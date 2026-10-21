@@ -238,6 +238,13 @@ def injury_line(row: dict) -> str | None:
         head = "OUT" if status == "Out" else status
         return (f"Injury: {head}{injury}{prac}{prev} [{provenance(row)}]; "
                 f"plays in {p * 100:.0f}% of simulations")  # fmt: skip
+    if p < 1.0 and not row.get("report_published", True) and row.get("prev_status"):
+        wk = f" in week {row['prev_week']}" if row.get("prev_week") else " last week"
+        return (f"No injury report yet this week; was {row['prev_status']}{wk} "
+                f"[nflverse, fetched {when(row.get('injury_fetched_at')) or 'time unknown'}]; "
+                f"plays in {p * 100:.0f}% of simulations (players in that spot played their "
+                "next game at this rate historically; updates with the team's first report, "
+                "usually Wednesday)")  # fmt: skip
     if p < 1.0 and practice:
         return (f"No game status yet, but {PRACTICE_SHORT.get(practice, practice)} this week"
                 f"{injury}{prev} [{provenance(row)}]; plays in {p * 100:.0f}% of simulations. "

@@ -34,6 +34,12 @@ PENDING_PRACTICE = frozenset({
 })  # fmt: skip
 
 
+CARRY_STATUSES = ("Out", "Doubtful", "Questionable")
+# Used only if a fitted parameter file predates the carry-forward table: conservative
+# values, replaced by fitted ones at the next sim_params run.
+CARRY_FALLBACK = {"Out": 0.35, "Doubtful": 0.5, "Questionable": 0.85}
+
+
 def is_rest(reason: str | None) -> bool:
     """Veterans' scheduled rest days appear as DNP; they say nothing about injury."""
     return bool(reason) and "rest" in reason.lower()
@@ -85,15 +91,28 @@ class SimParams:
         role: bool,
         prev_out: bool = False,
         final: bool = True,
+        prev_status: str | None = None,
+        published: bool = True,
     ) -> float:
-        """P(plays). With a game designation, use it. Without one, the player may simply
-        not have been designated *yet* (statuses come with the final report, usually
-        Friday), so before that (`final=False`) a missed or limited practice counts, as does
-        having been Out the week before. On a final report, no designation = cleared."""
+        """P(plays).
+
+        - A game designation this week decides it.
+        - Before the team's first report of the week (`published=False`, usually until
+          Wednesday), last week's designation is carried forward: a player Out last week
+          is not assumed healthy just because no new report exists yet.
+        - Before the final report (`final=False`), a missed or limited practice counts, as
+          does having been Out the week before. On a final report, no designation means
+          cleared to play.
+        """
         r = "role" if role else "depth"
         if status == "Out":
             return 0.0
         if status in (None, "", "Probable", "Note"):
+            if not published and prev_status in CARRY_STATUSES:
+                for key in (f"carry|{prev_status}|{r}", f"carry|{prev_status}|any"):
+                    if key in self.p_play:
+                        return self.p_play[key]
+                return CARRY_FALLBACK[prev_status]
             # On a final report no designation means cleared to play.
             if final or practice not in PENDING_PRACTICE:
                 return 1.0
@@ -109,7 +128,8 @@ class SimParams:
         return 0.5
 
 
-def _availability(injuries: pl.DataFrame, snaps: pl.DataFrame, player_games: pl.DataFrame):
+def _availability(injuries: pl.DataFrame, snaps: pl.DataFrame, player_games: pl.DataFrame,
+                  team_games: pl.DataFrame | None = None):  # fmt: skip
     """P(plays) by status, final practice and role. Role = averaged at least 30% of
     offensive snaps in the player's earlier games that season."""
     role = (
@@ -196,6 +216,52 @@ def _availability(injuries: pl.DataFrame, snaps: pl.DataFrame, player_games: pl.
                 row.get("role", "any") if "role" in keys else "any",
             ])  # fmt: skip
             out[key] = round(float(row["p"]), 4)
+    # "Carry": a player designated Out / Doubtful / Questionable in his team's latest
+    # report, before the team's next report exists. Outcome: played in the team's next
+    # game (byes skipped, so a bye week isn't counted as a missed game).
+    if team_games is not None and team_games.height:
+        tg = team_games.select("team", "season", "week").unique().sort("week")
+        prior = (
+            injuries.filter(pl.col("report_status").is_in(list(CARRY_STATUSES)))
+            .select(
+                pl.col("gsis_id").alias("key"),
+                "team",
+                "season",
+                "week",
+                pl.col("report_status").alias("prev"),
+            )  # fmt: skip
+            .unique(["key", "season", "week"])
+            .with_columns((pl.col("week") + 1).alias("from_week"))
+            .sort("from_week")
+        )
+        nxt = (
+            prior.join_asof(
+                tg.rename({"week": "next_week"}),
+                left_on="from_week",
+                right_on="next_week",
+                by=["team", "season"],
+                strategy="forward",
+                check_sortedness=False,
+            )
+            .filter(pl.col("next_week").is_not_null())
+            .drop("week")
+            .rename({"next_week": "week"})
+        )
+        carry = nxt.sort("week").join_asof(
+            role.sort("week"), on="week", by=["key", "season"], strategy="backward",
+            allow_exact_matches=False, check_sortedness=False,
+        ).with_columns(
+            pl.when(pl.col("prior_snap_pct") >= STARTER_SNAP_PCT).then(pl.lit("role"))
+            .otherwise(pl.lit("depth")).alias("role")
+        ).join(played, on=["key", "season", "week"], how="left").with_columns(
+            pl.col("played").fill_null(False)
+        )  # fmt: skip
+        for keys in (["prev", "role"], ["prev"]):
+            g = carry.group_by(keys).agg(pl.len().alias("n"), pl.col("played").mean().alias("p"))
+            for row in g.filter(pl.col("n") >= 30).iter_rows(named=True):
+                out["|".join(["carry", row["prev"], row.get("role", "any")])] = round(
+                    float(row["p"]), 4
+                )
     for keys in (["practice", "role", "prev"], ["practice", "role"], ["practice"]):
         g = pend.group_by(keys).agg(pl.len().alias("n"), pl.col("played").mean().alias("p"))
         for row in g.filter(pl.col("n") >= 30).iter_rows(named=True):
@@ -235,7 +301,7 @@ def fit(
     dst_lines: ffa.scoring.defense.dst_stat_lines output.
     """
     sp = SimParams(td_dispersion=td_dispersion, fg_dispersion=fg_dispersion)
-    sp.p_play = _availability(injuries, snaps, est_games)
+    sp.p_play = _availability(injuries, snaps, est_games, team_games)
 
     r = est_games.filter((pl.col("rec") > 0) & pl.col("ypr_s").is_not_null())
     sp.rec_yd_shape = float(

@@ -9,6 +9,7 @@ import polars as pl
 from dagster import (
     AssetExecutionContext,
     AssetSelection,
+    DefaultScheduleStatus,
     Definitions,
     MaterializeResult,
     RunRequest,
@@ -79,23 +80,31 @@ injuries_job = define_asset_job(
 )
 
 
-@schedule(job=nflverse_job, cron_schedule="15 2 * * *", execution_timezone="America/Chicago")
+@schedule(
+    job=nflverse_job,
+    cron_schedule="15 2 * * *",
+    execution_timezone="America/Chicago",
+    default_status=DefaultScheduleStatus.RUNNING,
+)
 def nightly_current_season(context: ScheduleEvaluationContext):
     """All datasets for the current season, after nflverse's overnight builds."""
     return RunRequest(partition_key=CURRENT, run_key=f"nightly-{context.scheduled_execution_time}")
 
 
-@schedule(job=injuries_job, cron_schedule="5 * * * *", execution_timezone="America/Chicago")
+@schedule(
+    job=injuries_job,
+    cron_schedule="5 * * * *",
+    execution_timezone="America/Chicago",
+    default_status=DefaultScheduleStatus.RUNNING,
+)
 def hourly_injuries(context: ScheduleEvaluationContext):
     """Injury reports and depth charts change through the week; snapshot them hourly."""
     return RunRequest(partition_key=CURRENT, run_key=f"hourly-{context.scheduled_execution_time}")
 
 
-@asset(group_name="status")
-def sleeper_players(context: AssetExecutionContext) -> MaterializeResult:
-    """Sleeper's player DB, fetched once a day (Sleeper asks for no more): IDs and names
-    for the crosswalk, and each player's current game status and practice participation,
-    a fresher second source than nflverse's injury file."""
+def _fetch_sleeper_status(log) -> dict:
+    """Fetch Sleeper's player DB (once: Sleeper asks for at most one fetch a day) and store
+    IDs/names plus this week's statuses. Returns run metadata."""
     from datetime import UTC, datetime
 
     from ffa.ingest import status as status_src
@@ -119,7 +128,26 @@ def sleeper_players(context: AssetExecutionContext) -> MaterializeResult:
         store.write(st, settings.warehouse_dir, "sleeper_status", volatile=True, ingested_at=now)
         meta |= {"week": week, "with_status": st.height,
                  "out": int((st["status"] == "Out").sum())}  # fmt: skip
-    return MaterializeResult(metadata=meta)
+    log.info(f"Sleeper player DB fetched: {meta}")
+    return meta
+
+
+def _sleeper_age_hours() -> float | None:
+    """Hours since the Sleeper player DB was last fetched, or None if never."""
+    from datetime import UTC, datetime
+
+    f = Path(settings.warehouse_dir) / "dims" / "sleeper_players.parquet"
+    if not f.exists():
+        return None
+    return (datetime.now(UTC).timestamp() - f.stat().st_mtime) / 3600
+
+
+@asset(group_name="status")
+def sleeper_players(context: AssetExecutionContext) -> MaterializeResult:
+    """Sleeper's player DB, fetched once a day (Sleeper asks for no more): IDs and names
+    for the crosswalk, and each player's current game status and practice participation,
+    a fresher second source than nflverse's injury file."""
+    return MaterializeResult(metadata=_fetch_sleeper_status(context.log))
 
 
 status_job = define_asset_job(
@@ -128,12 +156,22 @@ status_job = define_asset_job(
 
 
 # Once a day: after practice reports on weekdays; Sunday after inactives for the noon games.
-@schedule(job=status_job, cron_schedule="5 17 * * 1-6", execution_timezone="America/Chicago")
+@schedule(
+    job=status_job,
+    cron_schedule="5 17 * * 1-6",
+    execution_timezone="America/Chicago",
+    default_status=DefaultScheduleStatus.RUNNING,
+)
 def daily_status(context: ScheduleEvaluationContext):
     return RunRequest(run_key=f"status-{context.scheduled_execution_time}")
 
 
-@schedule(job=status_job, cron_schedule="45 10 * * 0", execution_timezone="America/Chicago")
+@schedule(
+    job=status_job,
+    cron_schedule="45 10 * * 0",
+    execution_timezone="America/Chicago",
+    default_status=DefaultScheduleStatus.RUNNING,
+)
 def sunday_status(context: ScheduleEvaluationContext):
     return RunRequest(run_key=f"status-{context.scheduled_execution_time}")
 
@@ -177,7 +215,12 @@ def player_ids(context: AssetExecutionContext) -> MaterializeResult:
 dims_job = define_asset_job("dims_refresh", selection=AssetSelection.groups("dims"))
 
 
-@schedule(job=dims_job, cron_schedule="45 2 * * *", execution_timezone="America/Chicago")
+@schedule(
+    job=dims_job,
+    cron_schedule="45 2 * * *",
+    execution_timezone="America/Chicago",
+    default_status=DefaultScheduleStatus.RUNNING,
+)
 def nightly_dims(context: ScheduleEvaluationContext):
     """Rebuild the ID crosswalk after the nightly roster load."""
     return RunRequest(run_key=f"dims-{context.scheduled_execution_time}")
@@ -218,7 +261,12 @@ def sleeper_league(context: AssetExecutionContext) -> MaterializeResult:
 leagues_job = define_asset_job("leagues_refresh", selection=AssetSelection.groups("leagues"))
 
 
-@schedule(job=leagues_job, cron_schedule="15 * * * *", execution_timezone="America/Chicago")
+@schedule(
+    job=leagues_job,
+    cron_schedule="15 * * * *",
+    execution_timezone="America/Chicago",
+    default_status=DefaultScheduleStatus.RUNNING,
+)
 def hourly_leagues(context: ScheduleEvaluationContext):
     """Rosters change with waivers and trades; resync hourly."""
     return RunRequest(run_key=f"leagues-{context.scheduled_execution_time}")
@@ -276,7 +324,12 @@ def player_games(context: AssetExecutionContext) -> MaterializeResult:
 features_job = define_asset_job("features_refresh", selection=AssetSelection.groups("features"))
 
 
-@schedule(job=features_job, cron_schedule="0 3 * * *", execution_timezone="America/Chicago")
+@schedule(
+    job=features_job,
+    cron_schedule="0 3 * * *",
+    execution_timezone="America/Chicago",
+    default_status=DefaultScheduleStatus.RUNNING,
+)
 def nightly_features(context: ScheduleEvaluationContext):
     """Rebuild the current season's game logs after the nightly data and ID loads."""
     return RunRequest(partition_key=CURRENT, run_key=f"features-{context.scheduled_execution_time}")
@@ -417,6 +470,17 @@ def weekly_projections(context: AssetExecutionContext) -> MaterializeResult:
     if week is None:
         context.log.info(f"No upcoming week in {season}; nothing to project")
         return MaterializeResult(metadata={"week": "none"})
+    # The second injury source must not depend on someone switching a schedule on: if
+    # Sleeper's DB is missing or over a day old, fetch it now (still at most daily).
+    age = _sleeper_age_hours()
+    if age is None or age > 23:
+        context.log.info(f"Sleeper statuses {'never fetched' if age is None else f'{age:.0f}h old'}"
+                         "; fetching before projecting")  # fmt: skip
+        try:
+            _fetch_sleeper_status(context.log)
+        except Exception as exc:  # projections still run on nflverse alone; say so
+            context.log.warning(f"Sleeper fetch failed, projecting without it: {exc}")
+        con = duck.connect(settings.warehouse_dir)
     models = projections_mod.load_models(settings.models_dir)
     r = projections_mod.run_week(con, settings.warehouse_dir, models, season, week)
     return MaterializeResult(
@@ -430,7 +494,12 @@ projections_job = define_asset_job(
 
 
 # After the hourly injury snapshot (:05) lands, so status changes reach the projections.
-@schedule(job=projections_job, cron_schedule="25 * * * *", execution_timezone="America/Chicago")
+@schedule(
+    job=projections_job,
+    cron_schedule="25 * * * *",
+    execution_timezone="America/Chicago",
+    default_status=DefaultScheduleStatus.RUNNING,
+)
 def hourly_projections(context: ScheduleEvaluationContext):
     return RunRequest(run_key=f"projections-{context.scheduled_execution_time}")
 

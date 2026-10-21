@@ -213,7 +213,8 @@ def build(
         .join(role, on="key", how="left").join(status, on="key", how="left")
         .join(_final_reports(injuries, season, week), on="team", how="left")
         .with_columns(pl.col("prev_out").fill_null(False),
-                      pl.col("final_report").fill_null(False))
+                      pl.col("final_report").fill_null(False),
+                      pl.col("report_published").fill_null(False))
     )  # fmt: skip
     p_play = [
         models.sim.play_probability(
@@ -222,9 +223,17 @@ def build(
             (r["season_snap_pct"] or 0) >= STARTER_SNAP_PCT,
             prev_out=r["prev_out"],
             final=r["final_report"],
+            prev_status=r["prev_status"],
+            published=r["report_published"],
         )  # fmt: skip
         for r in players.select(
-            "injury_status", "practice", "season_snap_pct", "prev_out", "final_report"
+            "injury_status",
+            "practice",
+            "season_snap_pct",
+            "prev_out",
+            "final_report",
+            "prev_status",
+            "report_published",
         ).iter_rows(named=True)
     ]
     # Inactive / injured reserve this week: will not play, but his role is inherited.
@@ -235,7 +244,8 @@ def build(
         "key", "name", "team", "opponent", "game_id", "position", "roster_status",
         "injury_status",
         "practice", "injury", "injury_source", "injury_updated_at", "injury_fetched_at",
-        "prev_out", "final_report", "season_snap_pct", "m_tgt", "m_catch", "m_ypr", "m_ypc",
+        "prev_out", "prev_status", "prev_week", "final_report", "report_published",
+        "season_snap_pct", "m_tgt", "m_catch", "m_ypr", "m_ypc",
         *[f"{n}_s" for n in ("tgt_share", "rz_tgt_share", "car_share", "rz_car_share",
                              "db_share", "rec_td_share", "rush_td_share", "catch_rate",
                              "ypr", "ypc", "adot", "int_rate", "scramble_rate", "fum_rate")],
@@ -272,29 +282,48 @@ def _statuses(injuries: pl.DataFrame, statuses: pl.DataFrame | None, season: int
     ).filter(pl.col("key").is_not_null())  # fmt: skip
     nfl = nfl.unique("key", keep="last")
     combined = status_src.combine(nfl, statuses)
-    prev = (
-        injuries.filter(
-            (pl.col("season") == season) & (pl.col("week") == week - 1)
-            & (pl.col("report_status") == "Out")
-        )
-        .select(pl.col("gsis_id").alias("key")).unique()
-        .with_columns(pl.lit(True).alias("prev_out"))
-    )  # fmt: skip
+    prev = _previous_status(injuries, season, week)
     return combined.rename({
         "status": "injury_status", "source": "injury_source",
         "updated_at": "injury_updated_at", "fetched_at": "injury_fetched_at",
     }).join(prev, on="key", how="full", coalesce=True)  # fmt: skip
 
 
+def _previous_status(injuries: pl.DataFrame, season: int, week: int) -> pl.DataFrame:
+    """Each player's designation in his team's most recent earlier report (the week
+    before, or before the bye), with that week. prev_out = it was Out. A player who
+    wasn't on that report gets nothing: he was healthy then."""
+    past = injuries.filter((pl.col("season") == season) & (pl.col("week") < week))
+    schema = {"key": pl.Utf8, "prev_status": pl.Utf8, "prev_week": pl.Int32,
+              "prev_out": pl.Boolean}  # fmt: skip
+    if past.height == 0 or "team" not in past.columns:
+        return pl.DataFrame(schema=schema)
+    last_week = past.group_by(pl.col("team")).agg(pl.col("week").max().alias("week"))
+    return (
+        past.join(last_week, on=["team", "week"], how="semi")
+        .filter(pl.col("report_status").is_in(["Out", "Doubtful", "Questionable"]))
+        .select(
+            pl.col("gsis_id").alias("key"), pl.col("report_status").alias("prev_status"),
+            pl.col("week").cast(pl.Int32).alias("prev_week"),
+            (pl.col("report_status") == "Out").alias("prev_out"),
+        )
+        .unique("key", keep="last")
+    )  # fmt: skip
+
+
 def _final_reports(injuries: pl.DataFrame, season: int, week: int) -> pl.DataFrame:
-    """Whether each team's final injury report is in. Midweek reports carry practice
-    participation only; game designations arrive with the final one (usually Friday), and
-    in 2015-2025 all but 0.3% of final reports designated someone. Judged from the data,
-    not the clock, because the feed can lag the official report."""
+    """Per team: whether this week's injury report has started (`report_published`: any
+    row this week, usually from Wednesday) and whether the final one is in
+    (`final_report`). Midweek reports carry practice participation only; game
+    designations arrive with the final one (usually Friday), and in 2015-2025 all but
+    0.3% of final reports designated someone. Judged from the data, not the clock,
+    because the feed can lag the official report."""
     cur = injuries.filter((pl.col("season") == season) & (pl.col("week") == week))
     if cur.height == 0 or "team" not in cur.columns:
-        return pl.DataFrame(schema={"team": pl.Utf8, "final_report": pl.Boolean})
+        return pl.DataFrame(schema={"team": pl.Utf8, "final_report": pl.Boolean,
+                                    "report_published": pl.Boolean})  # fmt: skip
     return cur.group_by(pl.col("team").replace(TEAM_ALIASES)).agg(
         pl.col("report_status").is_in(["Out", "Questionable", "Doubtful"]).any()
-        .alias("final_report")
+        .alias("final_report"),
+        pl.lit(True).alias("report_published"),
     )  # fmt: skip

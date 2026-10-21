@@ -87,6 +87,12 @@ Well calibrated, slightly overconfident above 70%.
   holdout used final reports, where this rule does not apply (it touches 2 of 8,602
   2025 player-weeks), so the results above stand.
 
+- **Carry-forward availability (Oct 2026).** Before a team's first injury report of the
+  week, last week's designation now carries forward (a player Out last week was
+  projected at 100% on Mondays and Tuesdays). Rates fitted on 2016-2023; on 2024 / 2025,
+  players Out played their team's next game 30% / 30% of the time (table: 26-31%),
+  Doubtful 48% / 46% (42-48%), Questionable 67% / 68% (71-80%). The holdout used final
+  reports, where this rule does not apply.
 - **Role inheritance (Oct 2026, [issue #1](https://github.com/Jpham303/FF-Assistant/issues/1)).**
   A starter ruled out used to vanish from the model, and his work was spread over all
   teammates by share (a quarterback picked up much of a running back's goal-line work).

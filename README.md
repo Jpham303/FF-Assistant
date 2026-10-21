@@ -150,8 +150,15 @@ report, usually Friday.
 
 - **Two sources.** nflverse's injury file (hourly) and Sleeper's player DB (once a day, as
   Sleeper requests: `daily_status` at 5:05 PM CT, `sunday_status` at 10:45 AM CT after
-  inactives for the noon games; each rebuilds projections right after). The more severe
+  inactives for the noon games; each rebuilds projections right after). Schedules are on
+  by default, and the projection run fetches Sleeper itself if its data is missing or
+  over a day old. The more severe
   designation wins: a missed ruling costs far more than a cautious one.
+- **Before the team's first report of the week** (usually until Wednesday), each player's
+  designation from the team's previous report is carried forward, at the rate players
+  in that spot historically played the next game (Out ~30%, Doubtful ~45%, Questionable
+  ~70%, by role; fitted 2016-2023, matching 2024-2025). Absence from a report counts as
+  healthy only once the team's new report exists.
 - **Before the final report**, a player with no designation who missed or was limited in
   practice is not assumed healthy. His chance to play comes from history: every report row
   with that practice level, split by role and whether he was Out the week before (a starter
