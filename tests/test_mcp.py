@@ -55,9 +55,8 @@ def test_league_scoring_and_my_team(tools):
     d = call("start_sit", players=["00-C", "00-D"], league="sleeper:1")
     assert d["scoring"] == "Test League (sleeper)"
     t = call("my_team")  # the only synced league is the default
-    assert t["team"] == "Mine" and t["not_playing"] == [
-        f"{BYE[1]} (bye or not on an active roster)"
-    ]
+    assert t["team"] == "Mine"
+    assert {r["name"]: r["reason"] for r in t["not_playing"]}[BYE[1]] == "bye"
 
 
 def test_api_errors_become_messages(tools):

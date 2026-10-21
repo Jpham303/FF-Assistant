@@ -20,7 +20,7 @@ from ffa import __version__
 from ffa.config import settings
 from ffa.db.models import LeagueRow, RosterEntryRow, TeamRow
 from ffa.scoring.rules import ScoringRules, default_rules, from_sleeper
-from ffa.service import startsit
+from ffa.service import availability, startsit
 from ffa.service.projections import upcoming_week
 from ffa.warehouse import duck
 
@@ -36,7 +36,7 @@ app = FastAPI(
 
 # The only warehouse tables the API reads (dims such as player_ids are always available).
 API_DATASETS = (
-    "schedules", "injuries", "team_games",
+    "schedules", "injuries", "team_games", "rosters",
     "projection_sims", "projection_inputs", "projection_teams",
 )  # fmt: skip
 
@@ -163,6 +163,18 @@ class LineupSlot(BaseModel):
     median: float | None = None
 
 
+class NotPlayingOut(BaseModel):
+    key: str | None
+    name: str
+    reason: str = Field(description="bye, out, injured_reserve, pup, non_football_injury, "
+                        "suspended, inactive, practice_squad, released, retired, "
+                        "not_on_nfl_roster, unknown")  # fmt: skip
+    detail: str
+    source: str
+    may_return: bool = Field(description="Could play later this season (bye: next week)")
+    fantasy_slot: str | None = Field(None, description="'IR' if in your league's IR slot")
+
+
 class MyTeam(BaseModel):
     league: str
     team: str
@@ -171,9 +183,9 @@ class MyTeam(BaseModel):
     scoring: str
     lineup: list[LineupSlot]
     bench: list[Player]
-    not_playing: list[str] = Field(
-        description="Rostered players who won't play: byes/unmatched, and players ruled out "
-        "(with the injury source and time)"
+    not_playing: list[NotPlayingOut] = Field(
+        description="Rostered players who won't play this week, each with a reason (bye, "
+        "out, injured_reserve, pup, suspended, released, ...) and its source"
     )
 
 
@@ -330,14 +342,29 @@ def my_team(league: str, week: int | None = None, con=Depends(get_con),
         key=lambda v: -v.mean,
     )  # fmt: skip
     names = {e.player_key: e.name or e.platform_player_id for e in entries}
-    byes = [f"{names.get(k) or k} (bye or not on an active roster)" for k in set(keys) - set(views)]
-    ruled_out = [
-        f"{v.name} ({next((d for d in v.drivers if d.startswith('Injury')), 'ruled out')})"
-        for v in views.values() if v.play_probability < startsit.OUT_THRESHOLD
-    ]  # fmt: skip
+    # Not playing: no projection (bye, reserve lists, ...), ruled out, or in the IR slot.
+    no_proj = {k: names.get(k) or k for k in set(keys) - set(views)}
+    out = availability.reasons(con, season, w, no_proj)
+    for v in views.values():
+        if v.play_probability < startsit.OUT_THRESHOLD:
+            prefixes = ("Injury", "On injured", "Inactive")
+            line = next((d for d in v.drivers if d.startswith(prefixes)), "Ruled out")
+            out.append(availability.NotPlaying(
+                v.key, v.name, "out", line, v.injury_source or "nflverse", True))  # fmt: skip
+    ir_slot = {e.player_key: e.name or e.platform_player_id for e in entries
+               if e.slot_type == "ir" and e.player_key}  # fmt: skip
+    for r in availability.reasons(con, season, w, ir_slot):
+        r.fantasy_slot = "IR"
+        out.append(r)
+    for e in entries:  # rostered but unmatched to an NFL player
+        if not e.player_key:
+            out.append(availability.NotPlaying(
+                None, e.name or e.platform_player_id, "unknown",
+                "Player not matched to the NFL data", "league sync", False,
+                "IR" if e.slot_type == "ir" else None))  # fmt: skip
     return MyTeam(
         league=row.id, team=team.name, season=season, week=w, scoring=label,
         lineup=[LineupSlot(**s) for s in lineup],
         bench=[Player(**startsit.as_dict(v)) for v in bench],
-        not_playing=sorted(byes + ruled_out),
+        not_playing=[NotPlayingOut(**r.as_dict()) for r in sorted(out, key=lambda r: r.name)],
     )  # fmt: skip

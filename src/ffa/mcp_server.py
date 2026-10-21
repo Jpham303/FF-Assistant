@@ -43,7 +43,11 @@ baselines on start/sit accuracy). Rules for answering with these tools:
 6. A player with no game status yet but a missed or limited practice is a real risk
    (statuses usually arrive with Friday's final report); report his play probability.
    A player ruled out is never the recommendation; say clearly that he is out.
-7. If a player is not found or not playing this week, say so. Never substitute a
+7. For players who aren't playing, give each one's `reason` and `detail` as returned
+   (bye, out, injured_reserve, pup, suspended, released, not_on_nfl_roster, ...). Call it a
+   bye only when reason is "bye". Point out players with may_return=true who are not on
+   bye: they may come back later in the season.
+8. If a player is not found or not playing this week, say so. Never substitute a
    similarly named player.
 """
 
@@ -199,7 +203,9 @@ def list_leagues() -> list[dict] | dict:
 def my_team(league: str | None = None, week: int | None = None) -> dict:
     """The user's roster in a league: the lineup that maximizes projected points under
     the league's slots and scoring, the bench with full projections and drivers, and
-    rostered players who are not playing (byes). league defaults to the only synced
+    rostered players who are not playing, each with a reason (bye, out, injured reserve,
+    PUP, suspended, released, not on an NFL roster...), its source and whether he may
+    return; players in the league's IR slot are included. league defaults to the only synced
     league. Changing the actual lineup is up to the user, on their platform."""
     try:
         if league is None:

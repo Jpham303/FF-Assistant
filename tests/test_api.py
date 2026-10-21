@@ -74,7 +74,15 @@ def warehouse(tmp_path):
         "p_pass": [0.62, 0.6],
     })  # fmt: skip
     store.write(teams.with_columns(*tag), root, "projection_teams")
-    sched = pl.DataFrame({"season": [SEASON] * 2, "week": [5, 6], "home_score": [24, None]})
+    sched = pl.DataFrame(
+        {
+            "season": [SEASON] * 2,
+            "week": [5, 6],
+            "home_score": [24, None],
+            "home_team": ["DAL", "DAL"],
+            "away_team": ["DET", "JAX"],
+        }
+    )  # fmt: skip  (DET plays week 5, not week 6: bye)
     store.write(sched.with_columns(pl.col("season", "week").cast(pl.Int32)), root, "schedules")
     tg = pl.DataFrame({"season": [SEASON] * 3, "week": [5] * 3, "team": ["DAL", "JAX", "DET"]})
     store.write(tg.with_columns(pl.col("season", "week").cast(pl.Int32)), root, "team_games")
@@ -86,6 +94,16 @@ def warehouse(tmp_path):
         "last_season": [SEASON] * (len(PLAYERS) + 1),
     })  # fmt: skip
     store.write_dim(ids, root, "player_ids")
+    rosters = pl.DataFrame({
+        "gsis_id": [p[0] for p in PLAYERS] + [BYE[0], "00-PUP", "00-IRS"],
+        "team": [p[2] for p in PLAYERS] + [BYE[2], "DAL", "JAX"],
+        "status": ["ACT"] * len(PLAYERS) + ["ACT", "RES", "RES"],
+        "status_description_abbr": ["A01"] * len(PLAYERS) + ["A01", "R04", "R01"],
+        "full_name": [p[1] for p in PLAYERS] + [BYE[1], "Pup Guy", "Ir Guy"],
+        "position": [p[3] for p in PLAYERS] + [BYE[3], "WR", "RB"],
+    }).with_columns(pl.lit(SEASON).cast(pl.Int32).alias("season"),
+                    pl.lit(WEEK).cast(pl.Int32).alias("week"))  # fmt: skip
+    store.write(rosters, root, "rosters", volatile=True)
     return root
 
 
@@ -110,6 +128,10 @@ def db():
                              name=name, slot_type="bench"))  # fmt: skip
     s.add(RosterEntryRow(team_id="sleeper:1:8", platform_player_id="E", player_key=BYE[0],
                          name=BYE[1], slot_type="bench"))  # fmt: skip
+    s.add(RosterEntryRow(team_id="sleeper:1:8", platform_player_id="P", player_key="00-PUP",
+                         name="Pup Guy", slot_type="bench"))  # fmt: skip
+    s.add(RosterEntryRow(team_id="sleeper:1:8", platform_player_id="I", player_key="00-IRS",
+                         name="Ir Guy", slot_type="ir"))  # fmt: skip
     s.commit()
     yield s
     s.close()
@@ -245,7 +267,17 @@ def test_my_team(client):
     assert slots["RB"]["key"] == "00-A" and slots["WR"]["key"] == "00-C"
     (benched,) = d["bench"]  # the lower of the two FLEX candidates sits
     assert benched["mean"] <= slots["FLEX"]["mean"]
-    assert d["not_playing"] == [f"{BYE[1]} (bye or not on an active roster)"]
+    why = {(r["name"], r["fantasy_slot"]): r for r in d["not_playing"]}
+    bye = why[(BYE[1], None)]
+    assert (bye["reason"], bye["detail"], bye["may_return"]) == (
+        "bye",
+        "DET has no game in week 6",
+        True,
+    )
+    pup = why[("Pup Guy", None)]
+    assert pup["reason"] == "pup" and pup["source"] == "nflverse roster, week 6"
+    ir = why[("Ir Guy", "IR")]  # players in the league's IR slot are listed too
+    assert ir["reason"] == "injured_reserve" and ir["may_return"]
     assert client.get("/leagues").json()[0]["league"] == "sleeper:1"
 
 
