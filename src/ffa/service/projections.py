@@ -24,6 +24,7 @@ from ffa.model.player import PlayerModel
 from ffa.model.sim import simulate
 from ffa.model.sim_params import SimParams
 from ffa.model.team import TeamModel
+from ffa.service import ifactive
 from ffa.warehouse import duck, store
 
 N_SIMS = 2000
@@ -98,6 +99,29 @@ def _sleeper_status(con, season: int, week: int) -> pl.DataFrame | None:
     return latest_sleeper_status(con, season, week)[0]
 
 
+def forced_active(inp, models: Models, n: int, seed: int) -> pl.DataFrame:
+    """For each player with a real but low chance to play (fewer than MIN_ACTIVE active
+    simulations expected in the main batch), simulate his game again with him forced
+    active, teammates as usual. Returns his own stat lines only, with `forced_key`."""
+    expected_active = inp.players["p_play"].fill_null(0) * N_SIMS
+    low = inp.players.filter(
+        (pl.col("p_play") > 0) & (expected_active < ifactive.MIN_ACTIVE)
+        & ~pl.col("position").is_in(["K"])
+    )  # fmt: skip
+    out = []
+    for i, r in enumerate(low.select("key", "game_id").iter_rows(named=True)):
+        teams = inp.teams.filter(pl.col("game_id") == r["game_id"])
+        players = inp.players.filter(pl.col("team").is_in(teams["team"].implode())).with_columns(
+            pl.when(pl.col("key") == r["key"]).then(1.0).otherwise(pl.col("p_play"))
+            .alias("p_play")
+        )  # fmt: skip
+        game = type(inp)(inp.season, inp.week, teams, players)
+        lines = simulate(game, models.sim, n=n, seed=seed * 1000 + i)
+        out.append(lines.filter(pl.col("key") == r["key"]).with_columns(
+            pl.lit(r["key"]).alias("forced_key")))  # fmt: skip
+    return pl.concat(out, how="diagonal_relaxed") if out else pl.DataFrame()
+
+
 @dataclass
 class RunResult:
     season: int
@@ -122,11 +146,21 @@ def run_week(con, warehouse_dir: str | Path, models: Models, season: int, week: 
     )  # fmt: skip
     check_inputs(inp.players)
     lines = simulate(inp, models.sim, n=n, seed=season * 100 + week)
+    forced = forced_active(inp, models, n=ifactive.MIN_ACTIVE * 2, seed=season * 100 + week)
     tag = pl.lit(season).cast(pl.Int32).alias("season"), pl.lit(week).cast(pl.Int32).alias("week")
     f32 = [c for c, t in lines.schema.items() if t == pl.Float64]
     store.write(
         lines.with_columns(pl.col(f32).cast(pl.Float32), *tag), warehouse_dir, "projection_sims"
     )
+    if forced.height:
+        store.write(forced.with_columns(pl.col(pl.Float64).cast(pl.Float32), *tag),
+                    warehouse_dir, "projection_sims_forced")  # fmt: skip
+    else:  # no low-chance players this run: don't leave a stale batch behind
+        stale = (
+            Path(warehouse_dir) / "projection_sims_forced" / f"season={season}" / f"week={week:02d}"
+        )
+        for f in stale.glob("*.parquet"):
+            f.unlink()
     store.write(inp.players.with_columns(*tag), warehouse_dir, "projection_inputs")
     store.write(inp.teams.with_columns(*tag), warehouse_dir, "projection_teams")
     summary = (

@@ -181,9 +181,14 @@ is applied at request time. Interactive docs at http://localhost:8000/docs.
 | --- | --- |
 | `GET /week` | current season, upcoming week, when projections ran, when each injury source was last fetched, data sources |
 | `GET /players/search?q=` | player keys by name, typos allowed; `match` (1.0 = exact) and `projected` (false on a bye). A bye-week player is reported as not playing, never swapped for a similar name |
-| `GET /projections?keys=` | mean, median, 10th–90th percentile, play probability, expected stats, points per scoring rule, and plain-language drivers each carrying its number |
-| `POST /start-sit` | 2–6 players: recommendation (key and name), P(each outscores each other) from simulations that share each game, close-call and injury notes |
+| `GET /projections?keys=` | **`proj_if_active`** (points if he plays) with its range, `play_probability` and injury status beside it, `expected_points` (= play probability × if-active; what lineups rank by), expected stats if active, points per scoring rule, and plain-language drivers each carrying its number. `mean`/`median`/`p10`/`p90`/`expected_stats` are deprecated copies for one release |
+| `POST /start-sit` | 2–6 players: recommendation (key and name, by expected points), `p_a_beats_b` (chance of sitting counted) and `p_a_beats_b_if_both_active` (talent alone) with a plain-words note when they disagree, P(each outscores each other) from simulations that share each game, close-call and injury notes |
 | `GET /leagues/{id}/my-team` | best lineup for your roster under the league's slots and scoring; bench; who isn't playing |
+
+A player with a low chance to play (fewer than 500 of 2,000 simulations active) gets his
+if-active numbers from an extra batch with him forced active, teammates as usual
+(`forced_active_batch`). Players not playing have no if-active projection and 0 expected
+points.
 
 Pass `league` (e.g. `sleeper:<league_id>`) to score with that league's settings; without
 it, `SLEEPER_LEAGUE_ID` or standard half-PPR is used.

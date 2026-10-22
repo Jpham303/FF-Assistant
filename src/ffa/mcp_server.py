@@ -33,7 +33,15 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    targets/carries), game environment (implied team total), availability (injury
    status), efficiency. Matchup ratings are a SMALL factor (they moved accuracy by
    0.1-0.3% in testing); never make a matchup the main reason.
-4. Mention injury notes and uncertainty (10th-90th percentile range) when they matter.
+4. Headline number: proj_if_active, the projection if he plays, with its range
+   (p10_if_active-p90_if_active). Show play_probability and the injury status NEXT to
+   it; never fold availability into the headline. expected_points (= play_probability x
+   proj_if_active) is what lineups are ranked by: show it as secondary, labelled as such.
+   Players not playing have no if-active projection: list them with 0 and the reason.
+   A player under 100% gets a short line on what to check, e.g. "Questionable: check
+   inactives about 90 minutes before kickoff." `mean` is deprecated: don't use it.
+   In start/sit, p_a_beats_b counts the chance of sitting; p_a_beats_b_if_both_active is
+   talent alone. When they pick different players, relay the note that explains it.
 5. Name the data behind the answer: `sources`, when projections ran, and for every injured
    or questionable player the injury source and time that come with him ("Out - Sleeper,
    updated Fri 4:12 PM"). The model does not read news. Game statuses come from nflverse
@@ -160,10 +168,13 @@ def start_sit(players: list[str], league: str | None = None, week: int | None = 
     league: league id from list_leagues (e.g. "sleeper:123"); defaults to the user's
     configured league, else standard half-PPR.
 
-    Returns the recommendation, close_call (true below 55%), pairwise p_a_beats_b from
-    simulations that share each game, notes (injuries, coin flips), and per player: mean,
-    median, p10-p90 range, play_probability, expected stats, points by scoring rule, and
-    drivers (plain-language reasons, each with its number). If a name is not found or the
+    Returns the recommendation (by expected points), close_call (true below 55%),
+    pairwise p_a_beats_b (all simulations: the chance of sitting counts) and
+    p_a_beats_b_if_both_active (talent alone), notes (injuries, coin flips, and when the
+    two disagree), and per player: proj_if_active with its range (the headline),
+    play_probability and injury status (shown beside it), expected_points (what ranks),
+    expected stats if active, points by scoring rule, and drivers (plain-language
+    reasons, each with its number). If a name is not found or the
     player is not playing, returns `unresolved` instead; relay it, don't guess."""
     try:
         keys, problems = _resolve(players, week)
@@ -178,8 +189,10 @@ def start_sit(players: list[str], league: str | None = None, week: int | None = 
 @mcp.tool(annotations=READ_ONLY)
 def player_projections(players: list[str], league: str | None = None,
                        week: int | None = None) -> list[dict] | dict:  # fmt: skip
-    """Projection and reasoning for one or more players: mean, median, 10th-90th
-    percentile, play probability, expected stats, points by scoring rule, and drivers.
+    """Projection and reasoning for one or more players: proj_if_active with its range
+    (the headline: points if he plays), play_probability and injury status beside it,
+    expected_points (= play_probability x proj_if_active, what lineups rank by), expected
+    stats if active, points by scoring rule, and drivers.
     Accepts names or keys; unresolved names come back as `unresolved`."""
     try:
         keys, problems = _resolve(players, week)
@@ -202,8 +215,9 @@ def list_leagues() -> list[dict] | dict:
 
 @mcp.tool(annotations=READ_ONLY)
 def my_team(league: str | None = None, week: int | None = None) -> dict:
-    """The user's roster in a league: the lineup that maximizes projected points under
-    the league's slots and scoring, the bench with full projections and drivers, and
+    """The user's roster in a league: the lineup that maximizes expected points under
+    the league's slots and scoring (each slot shows proj_if_active, play_probability,
+    expected_points and injury status), the bench with full projections and drivers, and
     rostered players who are not playing, each with a reason (bye, out, injured reserve,
     PUP, suspended, released, not on an NFL roster...), its source and whether he may
     return; players in the league's IR slot are included. league defaults to the only synced

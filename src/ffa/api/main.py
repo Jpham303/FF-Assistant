@@ -109,31 +109,55 @@ class SearchResult(BaseModel):
 
 
 class Player(BaseModel):
+    """Headline: proj_if_active (points if he plays) with its range. Availability is
+    beside it (play_probability, injury status), never averaged in; expected_points =
+    play_probability x proj_if_active is what lineups are ranked by."""
+
     key: str
     name: str
     team: str
     position: str
     opponent: str | None
-    mean: float = Field(description="Expected points, a chance of not playing included")
-    median: float
-    mean_if_active: float | None = Field(None, description="Expected points if he plays")
-    p10: float
-    p90: float
-    play_probability: float
+    proj_if_active: float | None = Field(
+        description="Expected points if he plays. Null when he won't (out, IR, PUP, bye)"
+    )
+    median_if_active: float | None
+    p10_if_active: float | None
+    p25_if_active: float | None
+    p75_if_active: float | None
+    p90_if_active: float | None
+    play_probability: float = Field(description="Chance he plays (takes a snap)")
+    expected_points: float = Field(
+        description="play_probability x proj_if_active; what lineups are ranked by"
+    )
+    active_sims: int = Field(description="Simulations behind the if-active numbers")
+    forced_active_batch: bool = Field(
+        description="If-active numbers come from an extra batch with him forced active "
+        "(his chance to play is too low for enough active simulations)"
+    )
+    expected_stats_if_active: dict[str, float]
     injury_status: str | None
     injury_source: str | None = Field(None, description="Where the injury information came from")
     injury_updated_at: str | None = Field(None, description="When that source last updated it")
     injury_fetched_at: str | None = Field(None, description="When we fetched it")
-    expected_stats: dict[str, float]
     points_by_rule: dict[str, float] = Field(description="Expected points from each scoring rule")
     drivers: list[str] = Field(description="Plain-language reasons, each with its number")
     p_best: float | None = Field(None, description="Share of simulations this player scores most")
+    # Deprecated (one release): mean == expected_points; the rest include the zeros
+    mean: float = Field(description="Deprecated: use expected_points")
+    median: float = Field(description="Deprecated: all simulations, zeros included")
+    p10: float = Field(description="Deprecated: all simulations, zeros included")
+    p90: float = Field(description="Deprecated: all simulations, zeros included")
+    expected_stats: dict[str, float] = Field(description="Deprecated: use expected_stats_if_active")
 
 
 class Pairwise(BaseModel):
     a: str
     b: str
-    p_a_beats_b: float
+    p_a_beats_b: float = Field(description="All simulations: the chance of sitting counts")
+    p_a_beats_b_if_both_active: float | None = Field(
+        description="Only simulations where both play: talent alone (null if too few)"
+    )
 
 
 class StartSitRequest(BaseModel):
@@ -160,7 +184,13 @@ class LineupSlot(BaseModel):
     slot: str
     key: str | None
     name: str | None
-    mean: float
+    proj_if_active: float | None = None
+    p10_if_active: float | None = None
+    p90_if_active: float | None = None
+    play_probability: float | None = None
+    expected_points: float = Field(0.0, description="What the lineup is chosen by")
+    injury_status: str | None = None
+    mean: float = Field(0.0, description="Deprecated: use expected_points")
     median: float | None = None
 
 
@@ -344,7 +374,7 @@ def my_team(league: str, week: int | None = None, con=Depends(get_con),
     bench = sorted(
         (v for k, v in views.items()
          if k not in starters and v.play_probability >= startsit.OUT_THRESHOLD),
-        key=lambda v: -v.mean,
+        key=lambda v: -v.expected_points,
     )  # fmt: skip
     names = {e.player_key: e.name or e.platform_player_id for e in entries}
     # Not playing: no projection (bye, reserve lists, ...), ruled out, or in the IR slot.

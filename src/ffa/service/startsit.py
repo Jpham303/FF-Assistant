@@ -21,9 +21,11 @@ from ffa.ingest.ids import normalize_name
 from ffa.leagues.base import SLOT_ELIGIBILITY
 from ffa.scoring import breakdown, score
 from ffa.scoring.rules import ScoringRules
+from ffa.service import ifactive
 from ffa.warehouse import duck
 
 CLOSE_CALL = 0.55  # below this P(A beats B), call it a coin flip
+MIN_BOTH_ACTIVE = 100  # simulations where both play, needed to report the if-both-active odds
 STAT_LABELS = {
     "pass_yd": "passing yards", "pass_td": "passing TDs", "pass_int": "interceptions",
     "rush_att": "carries", "rush_yd": "rushing yards", "rush_td": "rushing TDs",
@@ -59,6 +61,7 @@ class Week:
     # player's realized share can be shown; and teammates unlikely to play this week.
     usage: pl.DataFrame | None = None
     absent: pl.DataFrame | None = None
+    forced: pl.DataFrame | None = None  # forced-active batches for low play chances
 
 
 @dataclass
@@ -68,19 +71,31 @@ class PlayerView:
     team: str
     position: str
     opponent: str | None
-    mean: float
-    median: float
-    mean_if_active: float | None
-    p10: float
-    p90: float
+    # Headline: the projection if he plays, with its range (null when not playing)
+    proj_if_active: float | None
+    median_if_active: float | None
+    p10_if_active: float | None
+    p25_if_active: float | None
+    p75_if_active: float | None
+    p90_if_active: float | None
     play_probability: float
+    expected_points: float  # play_probability x proj_if_active: what lineups rank by
+    active_sims: int  # simulations behind the if-active numbers
+    forced_active_batch: bool  # if-active numbers from an extra forced-active batch
+    expected_stats_if_active: dict[str, float]
     injury_status: str | None
     injury_source: str | None
     injury_updated_at: str | None
     injury_fetched_at: str | None
-    expected_stats: dict[str, float]
+    expected_stats: dict[str, float]  # deprecated: all simulations, zeros included
     points_by_rule: dict[str, float]
     drivers: list[str]
+    # Deprecated copies, kept for one release: mean == expected_points; median, p10 and
+    # p90 over all simulations, zeros included.
+    mean: float = 0.0
+    median: float = 0.0
+    p10: float = 0.0
+    p90: float = 0.0
     p_best: float | None = None
 
 
@@ -128,12 +143,19 @@ def load_week(con, season: int, week: int, keys: list[str]) -> Week:
             where team in ({teams_in}) and p_play < 0.5
               and (coalesce(car_share_s, 0) >= 0.15 or coalesce(tgt_share_s, 0) >= 0.12)"""
     ).pl()
+    try:
+        f_t = duck.week(con, "projection_sims_forced", season, week)
+        forced = con.sql(
+            f"select * exclude (_ingested_at) from {f_t} where forced_key in ({in_list})"
+        ).pl()
+    except duck.MissingPartition:
+        forced = None
     return Week(
         season, week,
         get(sims_t, f"and key in ({in_list})"),
         inputs,
         get(teams_t),
-        usage, absent,
+        usage, absent, forced,
     )  # fmt: skip
 
 
@@ -295,7 +317,8 @@ def drivers(row: dict, team: dict | None, position: str,
     """Plain-language reasons, each with the number it rests on. `usage` holds what the
     simulation actually gave the player and his team (see `_usage_lines`)."""
     out = []
-    if team:
+    game_keys = ("spread_for", "opponent", "total_line", "implied", "mu_plays", "p_pass")
+    if team and all(team.get(k) is not None for k in game_keys):
         # spread_for is the team's expected margin (positive = favored). Written out in
         # words: a signed "spread" reads the opposite way to bettors (-3.5 = favored).
         m = team["spread_for"]
@@ -361,43 +384,55 @@ def _usage(g: pl.DataFrame, team: str, key: str, usage: dict, absent) -> dict | 
     }
 
 
-def _if_active(pts: pl.DataFrame, g: pl.DataFrame, key: str) -> float | None:
-    """Mean points in the simulations where he plays (the plays-only projection)."""
-    if "active" not in g.columns:
-        return None
-    act = g.filter(pl.col("active").fill_null(True)).select("sim")
-    p = pts.filter(pl.col("key") == key).join(act, on="sim", how="semi")["fpts"]
-    return float(p.mean()) if p.len() else None
-
-
 def player_views(w: Week, rules: ScoringRules) -> dict[str, PlayerView]:
     if w.sims.height == 0:
         return {}
-    pts = score(w.sims, rules).select("key", "sim", "fpts")
+    sims = w.sims.with_columns(ifactive.active_flag(w.sims).alias("active"))
+    pts = score(sims, rules).select("key", "sim", "fpts", "active")
+    forced_pts = None
+    if w.forced is not None and w.forced.height:
+        forced_pts = score(w.forced, rules).select(pl.col("forced_key").alias("key"), "sim",
+                                                   "fpts")  # fmt: skip
+    inputs = {r["key"]: r for r in w.inputs.iter_rows(named=True)}
+    play = {k: float(r.get("p_play") if r.get("p_play") is not None else 1.0)
+            for k, r in inputs.items()}  # fmt: skip
+    summary = {r["key"]: r for r in ifactive.summarize(pts, play, forced_pts)
+               .iter_rows(named=True)}  # fmt: skip
     terms = breakdown(w.sims, rules, ids=["key", "sim"])
     n = int(w.sims["sim"].max()) + 1
-    inputs = {r["key"]: r for r in w.inputs.iter_rows(named=True)}
     teams = {r["team"]: r for r in w.teams.iter_rows(named=True)}
     usage = {r["team"]: r for r in w.usage.iter_rows(named=True)} if w.usage is not None else {}
     absent = w.absent if w.absent is not None else None
     views = {}
-    for (key,), g in w.sims.group_by("key"):
+    for (key,), g in sims.group_by("key"):
         meta = g.row(0, named=True)
         pos = meta["position"]
         f = pts.filter(pl.col("key") == key)["fpts"]
+        sm = summary[key]
         row = inputs.get(key, {})
         team = teams.get(meta["team"])
         rule_pts = (
             terms.filter(pl.col("key") == key).group_by("term")
             .agg((pl.col("points").sum() / n).alias("p")).sort("p", descending=True)
         )  # fmt: skip
+        stat_src = g.filter(pl.col("active"))
+        if sm["forced_active_batch"] and w.forced is not None:
+            stat_src = w.forced.filter(pl.col("forced_key") == key)
+        rnd = lambda x: None if x is None else round(float(x), 2)  # noqa: E731
         views[key] = PlayerView(
             key=key, name=meta["name"], team=meta["team"], position=pos,
             opponent=row.get("opponent") or (team or {}).get("opponent"),
-            mean=float(f.mean()), median=float(f.median()),
-            mean_if_active=_if_active(pts, g, key),
-            p10=float(f.quantile(0.1)), p90=float(f.quantile(0.9)),
-            play_probability=float(row.get("p_play", 1.0) or 0.0),
+            proj_if_active=rnd(sm["proj_if_active"]),
+            median_if_active=rnd(sm["median_if_active"]),
+            p10_if_active=rnd(sm["p10_if_active"]), p25_if_active=rnd(sm["p25_if_active"]),
+            p75_if_active=rnd(sm["p75_if_active"]), p90_if_active=rnd(sm["p90_if_active"]),
+            play_probability=float(sm["play_probability"]),
+            expected_points=float(sm["expected_points"]),
+            active_sims=int(sm["active_sims"]),
+            forced_active_batch=bool(sm["forced_active_batch"]),
+            expected_stats_if_active={} if sm["proj_if_active"] is None else {
+                STAT_LABELS[s]: round(float(stat_src[s].mean()), 2)
+                for s in POSITION_STATS.get(pos, []) if s in stat_src.columns},
             injury_status=row.get("injury_status"),
             injury_source=row.get("injury_source") if row.get("injury_status") or
             row.get("practice") else None,
@@ -408,8 +443,32 @@ def player_views(w: Week, rules: ScoringRules) -> dict[str, PlayerView]:
             points_by_rule={t: round(float(p), 2) for t, p in rule_pts.iter_rows()},
             drivers=drivers(row | {"team": meta["team"]}, team, pos,
                             _usage(g, meta["team"], key, usage, absent)),
+            mean=float(sm["expected_points"]), median=float(f.median()),
+            p10=float(f.quantile(0.1)), p90=float(f.quantile(0.9)),
         )  # fmt: skip
     return views
+
+
+def disagreements(views: dict[str, PlayerView], pairwise: list[dict]) -> list[str]:
+    """When the better player if both play is not the better start once the chance of
+    sitting is counted, say so in plain words."""
+    out = []
+    for x in pairwise:
+        a, b = views[x["a"]], views[x["b"]]
+        p_all, p_both = x["p_a_beats_b"], x["p_a_beats_b_if_both_active"]
+        if p_both is None or x["a"] > x["b"]:  # each pair once
+            continue
+        if (p_both - 0.5) * (p_all - 0.5) < 0:
+            talent, safe = (a, b) if p_both > 0.5 else (b, a)
+            p_talent = p_both if p_both > 0.5 else 1 - p_both
+            p_safe = 1 - p_all if p_both > 0.5 else p_all
+            out.append(
+                f"{talent.name} is the better play if both are active "
+                f"({p_talent * 100:.0f}%), but {safe.name} wins {p_safe * 100:.0f}% once "
+                f"{talent.name}'s {(1 - talent.play_probability) * 100:.0f}% chance of sitting "
+                "is included."
+            )
+    return out
 
 
 def compare(w: Week, rules: ScoringRules) -> Comparison:
@@ -417,17 +476,24 @@ def compare(w: Week, rules: ScoringRules) -> Comparison:
     others (from simulations that share each game), and why."""
     views = player_views(w, rules)
     keys = list(views)
-    pts = score(w.sims, rules).select("key", "sim", "fpts")
+    sims = w.sims.with_columns(ifactive.active_flag(w.sims).alias("active"))
+    pts = score(sims, rules).select("key", "sim", "fpts", "active")
     mat = pts.pivot(on="key", index="sim", values="fpts").sort("sim")
     arr = mat.select(keys).to_numpy()
+    act = pts.pivot(on="key", index="sim", values="active").sort("sim").select(keys).to_numpy()
     best = arr.argmax(axis=1)
     for i, k in enumerate(keys):
         views[k].p_best = float((best == i).mean())
     pairwise = []
     for a, b in permutations(range(len(keys)), 2):
-        p = float(((arr[:, a] > arr[:, b]) + 0.5 * (arr[:, a] == arr[:, b])).mean())
-        pairwise.append({"a": keys[a], "b": keys[b], "p_a_beats_b": round(p, 3)})
-    ranked = sorted(views.values(), key=lambda v: v.mean, reverse=True)
+        beats = (arr[:, a] > arr[:, b]) + 0.5 * (arr[:, a] == arr[:, b])
+        both = act[:, a].astype(bool) & act[:, b].astype(bool)
+        # Talent alone: only simulations where both play (too few -> not reported)
+        p_both = float(beats[both].mean()) if both.sum() >= MIN_BOTH_ACTIVE else None
+        pairwise.append({"a": keys[a], "b": keys[b], "p_a_beats_b": round(float(beats.mean()), 3),
+                         "p_a_beats_b_if_both_active":
+                         None if p_both is None else round(p_both, 3)})  # fmt: skip
+    ranked = sorted(views.values(), key=lambda v: v.expected_points, reverse=True)
     # A ruled-out player is never the recommendation, whatever his mean says.
     playing = [v for v in ranked if v.play_probability >= OUT_THRESHOLD] or ranked
     ranked = playing + [v for v in ranked if v not in playing]
@@ -451,6 +517,7 @@ def compare(w: Week, rules: ScoringRules) -> Comparison:
             notes.append(f"{v.name} is {v.injury_status or 'not designated yet'}: projection "
                          f"includes a {(1 - v.play_probability) * 100:.0f}% chance he sits "
                          f"({v.injury_source or 'nflverse'}, {stamp}).")  # fmt: skip
+    notes += disagreements(views, pairwise)
     close = bool(second and p_top < CLOSE_CALL and second.play_probability >= OUT_THRESHOLD)
     return Comparison(
         season=w.season, week=w.week, players=ranked, pairwise=pairwise,
@@ -475,12 +542,19 @@ def best_lineup(views: dict[str, PlayerView], slots: list[str]) -> list[dict]:
             if v.position in eligible and v.key not in used and v.play_probability >= OUT_THRESHOLD
         ]
         if not cands:
-            filled[i] = {"slot": slots[i], "key": None, "name": None, "mean": 0.0}
+            filled[i] = {"slot": slots[i], "key": None, "name": None, "expected_points": 0.0,
+                         "mean": 0.0}  # fmt: skip
             continue
-        pick = max(cands, key=lambda v: v.mean)
+        pick = max(cands, key=lambda v: v.expected_points)
         used.add(pick.key)
         filled[i] = {"slot": slots[i], "key": pick.key, "name": pick.name,
-                     "mean": round(pick.mean, 2), "median": round(pick.median, 2)}  # fmt: skip
+                     "proj_if_active": pick.proj_if_active,
+                     "p10_if_active": pick.p10_if_active, "p90_if_active": pick.p90_if_active,
+                     "play_probability": round(pick.play_probability, 3),
+                     "expected_points": round(pick.expected_points, 2),
+                     "injury_status": pick.injury_status,
+                     "mean": round(pick.expected_points, 2),
+                     "median": round(pick.median, 2)}  # fmt: skip
     return [filled[i] for i in range(len(slots))]
 
 

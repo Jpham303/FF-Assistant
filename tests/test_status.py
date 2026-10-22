@@ -122,13 +122,16 @@ def test_more_severe_source_wins_and_is_credited():
 
 
 def _view(key, name, mean, p_play, status=None, pos="RB"):
+    if_active = mean / p_play if p_play else None
     return startsit.PlayerView(
-        key=key, name=name, team="PHI", position=pos, opponent="CAR", mean=mean,
-        mean_if_active=mean,
-        median=mean, p10=0, p90=mean * 2, play_probability=p_play, injury_status=status,
+        key=key, name=name, team="PHI", position=pos, opponent="CAR",
+        proj_if_active=if_active, median_if_active=if_active, p10_if_active=0,
+        p25_if_active=0, p75_if_active=if_active, p90_if_active=if_active,
+        play_probability=p_play, expected_points=mean, active_sims=2000 if p_play else 0,
+        forced_active_batch=False, expected_stats_if_active={}, injury_status=status,
         injury_source="Sleeper" if status else None, injury_updated_at="Fri Oct 16 4:12 PM CDT",
         injury_fetched_at="Fri Oct 16 5:05 PM CDT", expected_stats={}, points_by_rule={},
-        drivers=[],
+        drivers=[], mean=mean, median=mean, p10=0, p90=mean * 2,
     )  # fmt: skip
 
 

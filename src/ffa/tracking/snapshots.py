@@ -15,16 +15,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-import numpy as np
 import polars as pl
 
 from ffa.ingest.ids import TEAM_ALIASES
 from ffa.scoring import score
 from ffa.scoring.rules import DEFAULT_SLEEPER_SCORING, from_sleeper
+from ffa.service import ifactive
 from ffa.warehouse import duck
 
 DATASET = "projection_snapshots"
-QUANTILES = [round(q, 2) for q in np.linspace(0, 1, 21)]  # 0, 0.05, ..., 1
 ET = ZoneInfo("America/New_York")  # nflverse schedule times are Eastern
 STATS = ["pass_yd", "pass_td", "pass_int", "rush_att", "rush_yd", "rush_td", "rec_tgt",
          "rec", "rec_yd", "rec_td"]  # fmt: skip
@@ -84,19 +83,25 @@ def build(con, season: int, week: int, leagues: dict[str, dict], *, taken_at: da
         *[c for c in wanted if c in inputs.columns],
     )  # fmt: skip
     ko = kickoffs(con, season, week)
+    try:
+        forced = con.sql(
+            f"select * from {duck.week(con, 'projection_sims_forced', season, week)}"
+        ).pl()
+    except duck.MissingPartition:
+        forced = None
+    play = dict(meta.select("key", "play_probability").iter_rows())
     snapshot_id = str(uuid.uuid4())
     blocks = []
     for league, scoring in leagues.items():
-        pts = score(sims, from_sleeper(scoring)).select("key", "sim", "fpts", "active")
-        active = pts.filter(pl.col("active"))
-        exp = pts.group_by("key").agg(pl.col("fpts").mean().alias("expected_points"))
-        cond = active.group_by("key").agg(
-            pl.col("fpts").mean().alias("proj_if_active"),
-            *[pl.col("fpts").quantile(q, "linear").alias(f"p{int(q * 100)}")
-              for q in (0.1, 0.25, 0.5, 0.75, 0.9)],
-            pl.concat_list([pl.col("fpts").quantile(q, "linear") for q in QUANTILES])
-            .alias("quantiles"),
-        )  # fmt: skip
+        rules = from_sleeper(scoring)
+        pts = score(sims, rules).select("key", "sim", "fpts", "active")
+        fpts = None
+        if forced is not None and forced.height:
+            fpts = score(forced, rules).select(pl.col("forced_key").alias("key"), "sim", "fpts")
+        summ = ifactive.summarize(pts, play, fpts).rename({
+            "p10_if_active": "p10", "p25_if_active": "p25", "median_if_active": "p50",
+            "p75_if_active": "p75", "p90_if_active": "p90", "quantiles_if_active": "quantiles",
+        }).drop("play_probability")  # fmt: skip
         stats = (
             sims.filter(pl.col("active"))
             .group_by("key")
@@ -104,8 +109,9 @@ def build(con, season: int, week: int, leagues: dict[str, dict], *, taken_at: da
         )
         names = sims.select("key", "name", "team", "position").unique("key")
         block = (
-            names.join(exp, on="key").join(cond, on="key", how="left")
-            .join(stats, on="key", how="left").join(meta, on="key", how="left")
+            names.join(summ, on="key").join(stats, on="key", how="left")
+            .join(meta, on="key", how="left")
+            .with_columns(pl.col("play_probability").fill_null(1.0))
             .join(ko, on="team", how="left")
             .with_columns(
                 pl.lit(league).alias("league"), pl.lit(json.dumps(scoring, sort_keys=True))
