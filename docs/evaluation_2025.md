@@ -113,9 +113,39 @@ Well calibrated, slightly overconfident above 70%.
   right-skewed outcomes, for which bias and RMSE are the right measures and MAE rewards
   projecting low. Phase 3 re-tests it with bias and RMSE fixed as the criteria in advance.
 
+- **Quarterback starter (Oct 2026).** Each simulation used to hand the whole game to one
+  active QB drawn with odds equal to his dropback share. Backups' shares are shrunk toward
+  the position average (0.4-0.6 for a backup with little history), so an active starter
+  took no snaps in 30-56% of simulations, which gave healthy starters a 10th percentile of
+  0. Now the active QB with the highest share starts every simulation, and how much of
+  the game he plays is drawn from the fitted distribution (2016-2023, games he played:
+  under 50% of dropbacks in 2.8%, under 10% in 0.5%); the next QB gets the rest. Game
+  statuses: the practice note from the official report is now kept when Sleeper supplies
+  the designation (it was dropped, so midweek Questionable players all got the
+  "practice unknown" rate). 2025 holdout, QBs who played:
+
+  | | Before | After |
+  | --- | --- | --- |
+  | Starters (projected 12+, n=497): bias | −1.03 pts | +0.04 |
+  | Starters: MAE | 6.25 | 6.09 |
+  | Starters: below p10 / above p90 | 9.9% / 13.5% | 16.3% / 13.1% |
+  | Backups who played (n=180): MAE | 4.34 | 4.86 |
+  | All QBs: MAE / start-sit accuracy | 5.81 / 62.5% | 5.82 / 62.5% |
+
+  The old ranges looked calibrated only because the spurious zeros filled the low tail.
+  Starters who played the full game now land below p10 11.4% of the time and above p90
+  14.1%; the rest of the excess is 2025's higher exit rate (3.8% of starter games under
+  50% of dropbacks, which account for 22% of the misses below p10). Backups look worse
+  because these rows are conditioned on the backup playing, which the old random starts
+  happened to anticipate.
+
 ## Known limitations (for Phase 3)
 
 - Win probabilities above 70% run 2–4 points high; recalibrate on 2024 and recheck.
+- QB ranges: 16% of 2025 starter outcomes fell below p10 (target 10%). Fit the exit rate
+  on recent seasons and check QB scoring dispersion on 2024.
+- Practice trend (Wednesday-Friday) isn't used: nflverse keeps only the latest practice
+  status. Our daily snapshots will allow fitting it after a season.
 - Kickers: better than the season average but not significantly.
 - Matchup ratings add little (0.1–0.3% on validation), consistent with the literature;
   explanations size them accordingly.

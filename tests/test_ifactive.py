@@ -82,7 +82,9 @@ def test_low_play_chance_uses_a_forced_active_batch_and_is_stable():
         assert r["forced_active_batch"] and r["active_sims"] >= ifactive.MIN_ACTIVE
         assert r["expected_points"] == pytest.approx(0.05 * r["proj_if_active"])
         p50.append(r["median_if_active"])
-    assert abs(p50[0] - p50[1]) < 0.5
+    # Seed-to-seed sd of the median is ~0.24 at this size (12 seeds), so the difference of
+    # two has sd ~0.33: allow 3 sd.
+    assert abs(p50[0] - p50[1]) < 1.0
 
 
 def test_teammate_projection_rises_when_the_starter_sits():

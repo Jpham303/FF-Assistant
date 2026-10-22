@@ -90,11 +90,40 @@ def test_inactive_player_produces_nothing(lines):
     )
 
 
-def test_one_quarterback_per_game_and_mostly_the_starter(lines):
+def test_the_starter_plays_and_the_backup_only_finishes_some_games(lines):
     att = wide(lines, "pass_att")
-    both = (att["A_QB1"] > 0) & (att["A_QB2"] > 0)
-    assert not both.any()
-    assert (att["A_QB1"] > 0).mean() == pytest.approx(0.95, abs=0.02)
+    team = att["A_QB1"] + att["A_QB2"]
+    assert (att["A_QB1"] > 0).mean() > 0.99  # an active starter is never benched outright
+    # In-game exits, from the fitted distribution: the starter took under 75% of his
+    # team's dropbacks in 5.6% of 2016-2023 games he played.
+    assert (att["A_QB1"] / team < 0.75).mean() == pytest.approx(0.056, abs=0.02)
+    assert (att["A_QB1"] / team).mean() == pytest.approx(0.96, abs=0.02)
+
+
+def test_inflated_backup_share_does_not_bench_the_starter():
+    """Maye/Cousins bug: a backup's shrunk dropback share (0.6) was used as his odds of
+    starting, so an active starter scored 0 in a large share of simulations."""
+    w = week()
+    players = w.players.with_columns(
+        pl.when(pl.col("key") == "A_QB2").then(0.6).otherwise(pl.col("db_share_s"))
+        .alias("db_share_s")
+    )  # fmt: skip
+    out = simulate(WeekInputs(w.season, w.week, w.teams, players), params(), n=N, seed=3)
+    att = wide(out, "pass_att")
+    assert (att["A_QB1"] == 0).mean() < 0.01
+    assert np.quantile(att["A_QB1"], 0.1) > 20
+
+
+def test_backup_starts_when_the_starter_is_out():
+    w = week()
+    players = w.players.with_columns(
+        pl.when(pl.col("key") == "A_QB1").then(0.0).otherwise(pl.col("p_play")).alias("p_play")
+    )
+    out = simulate(WeekInputs(w.season, w.week, w.teams, players), params(), n=500, seed=5)
+    att = wide(out, "pass_att")
+    assert (att["A_QB1"] == 0).all() and (att["A_QB2"] > 0).all()
+    td = wide(out, "pass_td")
+    assert td["A_QB2"].mean() > 1  # the team's passing TDs go to whoever played
 
 
 def test_passing_equals_receiving_plus_other_pool(lines):

@@ -69,6 +69,13 @@ class SimParams:
     fg_distance: dict[str, dict[str, float]] = field(default_factory=dict)  # season -> pmf
     fg_make: dict[str, list[float]] = field(default_factory=dict)  # season -> [a, b] logit
     dst: dict[str, float] = field(default_factory=dict)
+    # Quantiles of the share of team dropbacks the expected starter (the dressed QB with
+    # the highest as-of dropback share) actually took. Mostly ~1; the low tail is in-game
+    # injuries and benchings. Empty = parameter file predates it: QB_STARTER_FALLBACK.
+    qb_starter_share: list[float] = field(default_factory=list)
+
+    def starter_share_quantiles(self) -> np.ndarray:
+        return np.asarray(self.qb_starter_share or QB_STARTER_FALLBACK, dtype=float)
 
     def save(self, path: str | Path) -> None:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -126,6 +133,38 @@ class SimParams:
             if key in self.p_play:
                 return self.p_play[key]
         return 0.5
+
+
+QB_QUANTILES = 41  # 0, 2.5%, ..., 100%
+# Fitted on 2016-2023 (4,373 team games): under 50% of dropbacks in 2.8% of games, under
+# 10% in 0.5%. Used only by parameter files fitted before this existed.
+QB_STARTER_FALLBACK = (
+    0.0, 0.4514, 0.6991, 0.875, 0.9348, 0.963, 0.9713, 0.975, 0.9787) + (1.0,) * 32
+
+
+def _qb_starter_share(est_games: pl.DataFrame) -> list[float]:
+    """Quantiles of the expected starter's realized share of team dropbacks, over every
+    team game: the QB who played with the highest as-of `db_share_s` is the one the
+    simulator would start. Only QBs who played (snaps > 0) count: the availability model
+    defines playing the same way, so a game he sat out is already in P(plays)."""
+    need = {"position", "season", "week", "team", "dropbacks", "team_dropbacks", "db_share_s",
+            "snaps"}
+    if not need <= set(est_games.columns):
+        return []
+    s = (
+        est_games.filter(
+            (pl.col("position") == "QB") & (pl.col("team_dropbacks") > 0)
+            & pl.col("db_share_s").is_not_null() & (pl.col("snaps").fill_null(0) > 0)
+        )  # fmt: skip
+        .sort("db_share_s", descending=True)
+        .unique(["season", "week", "team"], keep="first")
+        .select((pl.col("dropbacks").fill_null(0) / pl.col("team_dropbacks")).clip(0, 1))
+        .to_series()
+        .to_numpy()
+    )
+    if len(s) < 200:
+        return []
+    return [round(float(q), 4) for q in np.quantile(s, np.linspace(0, 1, QB_QUANTILES))]
 
 
 def _availability(injuries: pl.DataFrame, snaps: pl.DataFrame, player_games: pl.DataFrame,
@@ -302,6 +341,7 @@ def fit(
     """
     sp = SimParams(td_dispersion=td_dispersion, fg_dispersion=fg_dispersion)
     sp.p_play = _availability(injuries, snaps, est_games, team_games)
+    sp.qb_starter_share = _qb_starter_share(est_games)
 
     r = est_games.filter((pl.col("rec") > 0) & pl.col("ypr_s").is_not_null())
     sp.rec_yd_shape = float(

@@ -81,8 +81,13 @@ def _empty() -> pl.DataFrame:
 
 def combine(nflverse: pl.DataFrame, sleeper: pl.DataFrame | None) -> pl.DataFrame:
     """Per player, the more severe designation of the two sources (a missed ruling costs
-    far more than a cautious one), keeping that source's practice note and timestamps.
-    On equal severity the source with a practice note wins, then Sleeper (fresher)."""
+    far more than a cautious one), with that source's timestamps. On equal severity the
+    source with a practice note wins, then Sleeper (fresher).
+
+    The practice note is taken separately: the official report's (nflverse) when it has
+    one, else Sleeper's. Midweek, Sleeper often already lists a designation with no
+    practice note while the official report has practice and no designation yet; taking
+    the note with the designation would drop the practice signal."""
     frames = [nflverse.select(list(_SCHEMA)).cast(_SCHEMA)]  # type: ignore[arg-type]
     if sleeper is not None and sleeper.height:
         frames.append(sleeper.select(list(_SCHEMA)).cast(_SCHEMA))  # type: ignore[arg-type]
@@ -91,8 +96,20 @@ def combine(nflverse: pl.DataFrame, sleeper: pl.DataFrame | None) -> pl.DataFram
         pl.col("practice").is_not_null().cast(pl.Int8).alias("_prac"),
         (pl.col("source") == SOURCE).cast(pl.Int8).alias("_fresh"),
     )
-    return (
+    best = (
         allr.sort(["key", "_sev", "_prac", "_fresh"], descending=[False, True, True, True])
         .unique("key", keep="first", maintain_order=True)
         .drop("_sev", "_prac", "_fresh")
+    )
+    note = (
+        allr.filter(pl.col("practice").is_not_null())
+        .sort(["key", "_fresh"])  # official report (nflverse) first
+        .unique("key", keep="first", maintain_order=True)
+        .select("key", pl.col("practice").alias("_note"))
+    )
+    return (
+        best.join(note, on="key", how="left")
+        .with_columns(pl.coalesce("_note", "practice").alias("practice"))
+        .drop("_note")
+        .select(list(_SCHEMA))
     )

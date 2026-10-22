@@ -334,3 +334,22 @@ def test_schedules_run_by_default():
     from dagster_defs import defs
 
     assert all(s.default_status == dg.DefaultScheduleStatus.RUNNING for s in defs.schedules)
+
+
+def test_questionable_from_sleeper_keeps_the_official_practice_note():
+    """Midweek: Sleeper lists Questionable with no practice note, the official report has
+    practice but no designation yet. The note must survive, or every Questionable
+    player falls back to the same 'practice unknown' rate."""
+    full = "Full Participation in Practice"
+    inj = _injuries([(2026, 6, BARKLEY, None, LIMITED, None, "Hamstring"),
+                     (2026, 6, "00-IR", None, full, None, "Knee")])  # fmt: skip
+    sl = _sleeper([("4866", "Questionable", "Hamstring", None),
+                   ("9", "Questionable", "Knee", "DNP")])  # fmt: skip
+    rows = {r["key"]: r for r in _statuses(inj, sl, 2026, 6).iter_rows(named=True)}
+    assert rows[BARKLEY]["injury_status"] == "Questionable"
+    assert rows[BARKLEY]["injury_source"] == "Sleeper"
+    assert rows[BARKLEY]["practice"] == LIMITED
+    assert rows["00-IR"]["practice"] == full  # the official report outranks Sleeper's note
+    sp = SimParams(p_play={f"Questionable|{LIMITED}|role": 0.75,
+                           "Questionable|any|role": 0.73})  # fmt: skip
+    assert sp.play_probability("Questionable", rows[BARKLEY]["practice"], True) == 0.75

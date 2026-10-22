@@ -93,16 +93,29 @@ def _propensity(td_share: np.ndarray, opp_share: np.ndarray, active: np.ndarray,
     return np.clip(np.nan_to_num(td / np.maximum(opp, 1e-3)), 0, 5)
 
 
-def _choose(rng, weights: np.ndarray, active: np.ndarray) -> np.ndarray:
-    """For each simulation, pick one active player with probability ~ weights. (P, S) mask."""
-    w = np.clip(np.nan_to_num(weights), 1e-9, None)[:, None] * active
-    tot = w.sum(axis=0)
-    u = rng.random(w.shape[1]) * tot
-    idx = (np.cumsum(w, axis=0) < u).sum(axis=0)
-    out = np.zeros_like(active, dtype=bool)
-    ok = tot > 0
-    out[np.minimum(idx[ok], w.shape[0] - 1), np.nonzero(ok)[0]] = True
-    return out
+def _qb_split(rng, share: np.ndarray, active: np.ndarray, quantiles: np.ndarray) -> np.ndarray:
+    """(Q, S) fraction of the team's dropbacks each QB takes.
+
+    The active QB with the highest dropback share starts every simulation; how much of
+    the game he plays is drawn from the fitted distribution (`quantiles`), and the rest
+    goes to the next active QB (in-game injury or benching). With no other active QB the
+    starter takes it all. Shares are NOT used as the odds of starting: a backup's share is
+    shrunk toward the position average and so overstates his chance of playing."""
+    Q, S = active.shape
+    frac = np.zeros((Q, S))
+    if Q == 0:
+        return frac
+    w = np.where(active, np.nan_to_num(share)[:, None] + 1e-9, -np.inf)
+    order = np.argsort(-w, axis=0)
+    starter, backup = order[0], order[1] if Q > 1 else order[0]
+    has_starter = active[starter, np.arange(S)]
+    has_backup = (backup != starter) & active[backup, np.arange(S)]
+    f = np.interp(rng.random(S), np.linspace(0, 1, len(quantiles)), quantiles)
+    f = np.where(has_backup, f, 1.0)
+    cols = np.arange(S)
+    frac[starter, cols] = np.where(has_starter, f, 0.0)
+    frac[backup[has_backup], cols[has_backup]] += 1 - f[has_backup]
+    return frac
 
 
 def simulate(inp: WeekInputs, sp: SimParams, n: int = 2000, seed: int = 0) -> pl.DataFrame:
@@ -167,10 +180,11 @@ def simulate(inp: WeekInputs, sp: SimParams, n: int = 2000, seed: int = 0) -> pl
         p_car = car[:P]
 
         is_qb = pos == "QB"
-        qb_pick = np.zeros((P, n), dtype=bool)
+        qb_frac = np.zeros((P, n))
         if is_qb.any():
-            qb_pick[is_qb] = _choose(rng, col("db_share_s")[is_qb], active[is_qb])
-        qb_db = qb_pick * dropbacks[ti]
+            qb_frac[is_qb] = _qb_split(rng, col("db_share_s")[is_qb], active[is_qb],
+                                       sp.starter_share_quantiles())  # fmt: skip
+        qb_db = np.rint(qb_frac * dropbacks[ti])
         scrambles = rng.binomial(
             qb_db.astype(int), np.clip(col("scramble_rate_s"), 0, 0.5)[:, None]
         )
@@ -200,12 +214,15 @@ def simulate(inp: WeekInputs, sp: SimParams, n: int = 2000, seed: int = 0) -> pl
         rec_td = _split(rng, pass_tds[ti], w_rec)[:P]
         rush_td = _split(rng, rush_tds[ti], w_rush)
 
-        pass_att = np.rint(qb_pick * team_targets[ti] * sp.pass_att_per_target)
+        pass_att = np.rint(qb_frac * team_targets[ti] * sp.pass_att_per_target)
         ints = rng.binomial(pass_att.astype(int), np.clip(
             col("int_rate_s") * (team_m["opp_def_int_mult"] or 1.0), 0, 0.2)[:, None])  # fmt: skip
-        pass_yd = qb_pick * (rec_yd.sum(axis=0) + o_yd)
-        pass_td = qb_pick * pass_tds[ti]
-        pass_cmp = qb_pick * (rec.sum(axis=0) + o_rec)
+        # Counts are split between the QBs who played (multinomial on their fractions),
+        # yards in proportion.
+        pass_yd = qb_frac * (rec_yd.sum(axis=0) + o_yd)
+        pass_td = _qb_counts(rng, pass_tds[ti], qb_frac)
+        pass_cmp = np.minimum(_qb_counts(rng, rec.sum(axis=0) + o_rec, qb_frac), pass_att)
+        qb_sacks = _qb_counts(rng, sacks[ti], qb_frac)
         touches = (rec + rush_att).astype(int)
         fum = rng.binomial(
             touches,
@@ -219,7 +236,7 @@ def simulate(inp: WeekInputs, sp: SimParams, n: int = 2000, seed: int = 0) -> pl
 
         stats = {
             "pass_yd": pass_yd, "pass_td": pass_td, "pass_int": ints, "pass_cmp": pass_cmp,
-            "pass_att": pass_att, "pass_inc": pass_att - pass_cmp, "pass_sack": qb_pick * sacks[ti],
+            "pass_att": pass_att, "pass_inc": pass_att - pass_cmp, "pass_sack": qb_sacks,
             "rush_att": rush_att, "rush_yd": rush_yd, "rush_td": rush_td, "rec": rec,
             "rec_tgt": p_tgt, "rec_yd": rec_yd, "rec_td": rec_td, "fum_lost": fum, "fum": fum,
         }  # fmt: skip
@@ -276,6 +293,16 @@ def simulate(inp: WeekInputs, sp: SimParams, n: int = 2000, seed: int = 0) -> pl
         lines.append(_frame(key, {k: np.asarray(v)[None, :] for k, v in s.items()}, None, n))
 
     return pl.concat(lines, how="diagonal_relaxed").fill_null(0.0)
+
+
+def _qb_counts(rng, total: np.ndarray, frac: np.ndarray) -> np.ndarray:
+    """Split per-simulation counts among QBs by their dropback fractions (Q, S); nothing
+    is credited in a simulation with no QB."""
+    tot = frac.sum(axis=0)
+    p = np.where(tot > 0, frac / np.where(tot > 0, tot, 1), 0).T
+    p[tot == 0, 0] = 1.0
+    out = rng.multinomial(np.asarray(total).astype(np.int64), p).T
+    return out * (tot > 0)
 
 
 def _split(rng, total: np.ndarray, weights: np.ndarray) -> np.ndarray:
