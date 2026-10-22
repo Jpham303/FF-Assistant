@@ -138,8 +138,9 @@ class SimParams:
 QB_QUANTILES = 41  # 0, 2.5%, ..., 100%
 # Fitted on 2016-2023 (4,373 team games): under 50% of dropbacks in 2.8% of games, under
 # 10% in 0.5%. Used only by parameter files fitted before this existed.
-QB_STARTER_FALLBACK = (
-    0.0, 0.4514, 0.6991, 0.875, 0.9348, 0.963, 0.9713, 0.975, 0.9787) + (1.0,) * 32
+QB_STARTER_FALLBACK = (0.0, 0.4514, 0.6991, 0.875, 0.9348, 0.963, 0.9713, 0.975, 0.9787) + (
+    1.0,
+) * 32
 
 
 def _qb_starter_share(est_games: pl.DataFrame) -> list[float]:
@@ -147,14 +148,24 @@ def _qb_starter_share(est_games: pl.DataFrame) -> list[float]:
     team game: the QB who played with the highest as-of `db_share_s` is the one the
     simulator would start. Only QBs who played (snaps > 0) count: the availability model
     defines playing the same way, so a game he sat out is already in P(plays)."""
-    need = {"position", "season", "week", "team", "dropbacks", "team_dropbacks", "db_share_s",
-            "snaps"}
+    need = {
+        "position",
+        "season",
+        "week",
+        "team",
+        "dropbacks",
+        "team_dropbacks",
+        "db_share_s",
+        "snaps",
+    }
     if not need <= set(est_games.columns):
         return []
     s = (
         est_games.filter(
-            (pl.col("position") == "QB") & (pl.col("team_dropbacks") > 0)
-            & pl.col("db_share_s").is_not_null() & (pl.col("snaps").fill_null(0) > 0)
+            (pl.col("position") == "QB")
+            & (pl.col("team_dropbacks") > 0)
+            & pl.col("db_share_s").is_not_null()
+            & (pl.col("snaps").fill_null(0) > 0)
         )  # fmt: skip
         .sort("db_share_s", descending=True)
         .unique(["season", "week", "team"], keep="first")
