@@ -113,6 +113,12 @@ class Comparison:
     recommendation: str
     close_call: bool
     notes: list[str] = field(default_factory=list)
+    # What separates the recommendation from the runner-up, biggest first (points if
+    # active by stat group, plus availability): [{"factor", "points", "favors", "detail"}]
+    decision_drivers: list[dict] = field(default_factory=list)
+    # Your chance of winning this week's fantasy matchup with each candidate starting
+    # (set by the API when a league and your team are known)
+    matchup: dict | None = None
 
 
 # ---------------------------------------------------------------- loading
@@ -508,6 +514,89 @@ def disagreements(views: dict[str, PlayerView], pairwise: list[dict]) -> list[st
     return out
 
 
+# Scoring terms grouped the way a manager reads them, with the expected stats (if
+# active) that explain each group.
+TERM_GROUPS = {
+    "Receptions": (("rec",), ("receptions", "targets")),
+    "Receiving yards": (("rec_yd",), ("receiving yards", "targets")),
+    "Receiving TDs": (("rec_td",), ("receiving TDs",)),
+    "Rushing yards": (("rush_yd",), ("rushing yards", "carries")),
+    "Rushing TDs": (("rush_td",), ("rushing TDs", "carries")),
+    "Passing yards": (("pass_yd",), ("passing yards",)),
+    "Passing TDs": (("pass_td",), ("passing TDs",)),
+    "Interceptions": (("pass_int",), ("interceptions",)),
+    "Kicking": (("fgm_", "xpm", "fgmiss", "xpmiss"), ("field goals", "extra points")),
+    "Sacks and takeaways": (("sack", "int", "fum_rec", "ff", "safe"),
+                            ("sacks", "interceptions", "fumble recoveries")),
+    "Defensive and return TDs": (("def_td", "def_st_td", "st_td", "fum_rec_td"),
+                                 ("defensive TDs",)),
+    "Points allowed": (("pts_allow",), ("points allowed",)),
+    "Fumbles": (("fum_lost",), ()),
+    "Two-point conversions": (("pass_2pt", "rush_2pt", "rec_2pt"), ()),
+}  # fmt: skip
+MIN_DRIVER_POINTS = 0.1
+
+
+def _group(term: str) -> str:
+    for name, (prefixes, _) in TERM_GROUPS.items():
+        if any(term == p or (p.endswith("_") or p == "pts_allow") and term.startswith(p)
+               for p in prefixes):  # fmt: skip
+            return name
+    return "Other"
+
+
+def _if_active_terms(w: Week, rules: ScoringRules, view: PlayerView) -> dict[str, float]:
+    """Expected points by stat group in the simulations where he plays (his forced-active
+    batch when he rarely does), so the split matches proj_if_active."""
+    if view.forced_active_batch and w.forced is not None:
+        src = w.forced.filter(pl.col("forced_key") == view.key)
+    else:
+        src = w.sims.filter(pl.col("key") == view.key)
+        src = src.filter(ifactive.active_flag(src))
+    n = src["sim"].n_unique() if src.height else 0
+    if n == 0:
+        return {}
+    t = breakdown(src.with_columns(pl.lit(view.key).alias("key")), rules, ids=["key", "sim"])
+    out: dict[str, float] = {}
+    for term, pts in t.group_by("term").agg(pl.col("points").sum()).iter_rows():
+        g = _group(term)
+        out[g] = out.get(g, 0.0) + float(pts) / n
+    return out
+
+
+def decision_drivers(w: Week, rules: ScoringRules, views: dict[str, PlayerView],
+                     a: str, b: str, top: int = 3) -> list[dict]:  # fmt: skip
+    """The biggest contributions to the gap between `a` (recommended) and `b`: the
+    if-active gap split by stat group, each explained with both players' expected stats,
+    plus availability (expected-points gap minus if-active gap) when it matters.
+    Positive points favor `a`."""
+    va, vb = views[a], views[b]
+    ta, tb = _if_active_terms(w, rules, va), _if_active_terms(w, rules, vb)
+    rows = []
+    for g in sorted(set(ta) | set(tb)):
+        d = ta.get(g, 0.0) - tb.get(g, 0.0)
+        stats = TERM_GROUPS.get(g, ((), ()))[1]
+        detail = "; ".join(
+            f"{va.expected_stats_if_active.get(st, 0):.1f} vs "
+            f"{vb.expected_stats_if_active.get(st, 0):.1f} {st}"
+            for st in stats
+            if st in va.expected_stats_if_active or st in vb.expected_stats_if_active
+        )  # fmt: skip
+        rows.append({"factor": g, "points": d, "detail": detail or None})
+    if va.proj_if_active is not None and vb.proj_if_active is not None:
+        avail = (va.expected_points - vb.expected_points) - (va.proj_if_active - vb.proj_if_active)
+        rows.append({"factor": "Availability", "points": avail,
+                     "detail": f"plays in {va.play_probability * 100:.0f}% vs "
+                               f"{vb.play_probability * 100:.0f}% of simulations"})  # fmt: skip
+    rows = [r for r in rows if abs(r["points"]) >= MIN_DRIVER_POINTS]
+    rows.sort(key=lambda r: -abs(r["points"]))
+    names = {a: va.name, b: vb.name}
+    return [
+        r | {"points": round(r["points"], 2), "favors": names[a] if r["points"] > 0 else names[b]}
+        for r in rows[:top]
+    ]
+
+
 def compare(w: Week, rules: ScoringRules) -> Comparison:
     """Start/sit between 2+ players: who to start, how likely each is to outscore the
     others (from simulations that share each game), and why."""
@@ -529,7 +618,9 @@ def compare(w: Week, rules: ScoringRules) -> Comparison:
         p_both = float(beats[both].mean()) if both.sum() >= MIN_BOTH_ACTIVE else None
         pairwise.append({"a": keys[a], "b": keys[b], "p_a_beats_b": round(float(beats.mean()), 3),
                          "p_a_beats_b_if_both_active":
-                         None if p_both is None else round(p_both, 3)})  # fmt: skip
+                         None if p_both is None else round(p_both, 3),
+                         "median_gap":
+                         round(float(np.median(arr[:, a] - arr[:, b])), 2)})  # fmt: skip
     ranked = sorted(views.values(), key=lambda v: v.expected_points, reverse=True)
     # A ruled-out player is never the recommendation, whatever his mean says.
     playing = [v for v in ranked if v.play_probability >= OUT_THRESHOLD] or ranked
@@ -559,6 +650,8 @@ def compare(w: Week, rules: ScoringRules) -> Comparison:
     return Comparison(
         season=w.season, week=w.week, players=ranked, pairwise=pairwise,
         recommendation=top.key, close_call=close, notes=notes,
+        decision_drivers=decision_drivers(w, rules, views, top.key, second.key)
+        if second else [],
     )  # fmt: skip
 
 

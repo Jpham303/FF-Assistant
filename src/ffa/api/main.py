@@ -20,7 +20,7 @@ from ffa import __version__
 from ffa.config import settings
 from ffa.db.models import LeagueRow, RosterEntryRow, TeamRow
 from ffa.scoring.rules import ScoringRules, default_rules, from_sleeper
-from ffa.service import availability, startsit
+from ffa.service import availability, fantasy_matchup, startsit
 from ffa.service.projections import latest_sleeper_status, upcoming_week
 from ffa.warehouse import duck
 
@@ -163,6 +163,9 @@ class Pairwise(BaseModel):
     p_a_beats_b_if_both_active: float | None = Field(
         description="Only simulations where both play: talent alone (null if too few)"
     )
+    median_gap: float | None = Field(
+        None, description="Median of (a's points - b's points) over the joint simulations"
+    )
 
 
 class StartSitRequest(BaseModel):
@@ -183,6 +186,16 @@ class StartSitResponse(BaseModel):
     notes: list[str]
     players: list[Player]
     pairwise: list[Pairwise]
+    decision_drivers: list[dict] = Field(
+        default_factory=list,
+        description="Biggest contributions to the gap between the recommendation and the "
+        "runner-up (factor, points, favors, detail)",
+    )
+    matchup: dict | None = Field(
+        None,
+        description="Your chance of winning this week's fantasy matchup with each "
+        "candidate starting (league with your team only)",
+    )
 
 
 class LineupSlot(BaseModel):
@@ -337,6 +350,10 @@ def start_sit(req: StartSitRequest, con=Depends(get_con), db=Depends(get_db)) ->
     if len(set(req.players)) != len(req.players):
         raise HTTPException(422, "Duplicate players")
     c = startsit.compare(_views(con, req.players, rules, season, w), rules)
+    row = _league(db, req.league)
+    if row is not None and db is not None:
+        odds = fantasy_matchup.win_odds(con, db, row, season, w, req.players, rules)
+        c = fantasy_matchup.apply_tiebreak(c, odds)
     d = startsit.as_dict(c)
     name = next(p["name"] for p in d["players"] if p["key"] == d["recommendation"])
     return StartSitResponse(scoring=label, recommendation_name=name, **d)

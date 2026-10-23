@@ -27,8 +27,12 @@ baselines on start/sit accuracy). Rules for answering with these tools:
 1. Only cite numbers that a tool returned (projections, percentages, shares, ratings,
    betting lines). Never invent or recall stats, ranks or news from elsewhere and present
    them as the model's.
-2. Lead with the recommendation and how likely it is to be right (p_a_beats_b). Below 55%
-   it is a coin flip; say so plainly rather than overselling.
+2. Lead with the recommendation, how likely it is to be right (p_a_beats_b) and the
+   median_gap in points. Below 55% it is a coin flip; say so plainly rather than
+   overselling. Then the top `decision_drivers` (what separates the two, in points, with
+   their detail). When `matchup` is available, give the user's chance of beating that
+   opponent with each option; on a coin flip the recommendation may come from that
+   tiebreaker (floor when favored, ceiling when the underdog): relay its note.
 3. Explain with the `drivers` each player comes with, biggest first: role (share of
    targets/carries), game environment (implied team total), availability (injury
    status), efficiency. Matchup ratings are a SMALL factor (they moved accuracy by
@@ -168,10 +172,13 @@ def start_sit(players: list[str], league: str | None = None, week: int | None = 
     league: league id from list_leagues (e.g. "sleeper:123"); defaults to the user's
     configured league, else standard half-PPR.
 
-    Returns the recommendation (by expected points), close_call (true below 55%),
-    pairwise p_a_beats_b (all simulations: the chance of sitting counts) and
-    p_a_beats_b_if_both_active (talent alone), notes (injuries, coin flips, and when the
-    two disagree), and per player: proj_if_active with its range (the headline),
+    Returns the recommendation (by expected points; on a close call, by the user's chance
+    of winning this week's matchup), close_call (true below 55%), pairwise p_a_beats_b
+    (all simulations: the chance of sitting counts), p_a_beats_b_if_both_active (talent
+    alone) and median_gap, decision_drivers (biggest point differences, with detail),
+    matchup (opponent and P(win) with each candidate, when a league is used), notes
+    (injuries, coin flips, tiebreaker, and when the odds disagree), and per player:
+    proj_if_active with its range (the headline),
     play_probability and injury status (shown beside it), expected_points (what ranks),
     expected stats if active, points by scoring rule, and drivers (plain-language
     reasons, each with its number). If a name is not found or the
