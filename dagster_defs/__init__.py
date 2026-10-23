@@ -39,6 +39,7 @@ from ffa.scoring.defense import dst_stat_lines
 from ffa.scoring.defense import load_pbp as load_dst_pbp
 from ffa.service import projections as projections_mod
 from ffa.tracking import actuals as actuals_mod
+from ffa.tracking import benchmarks as benchmarks_mod
 from ffa.tracking import report as report_mod
 from ffa.tracking import snapshots
 from ffa.warehouse import duck, store
@@ -545,12 +546,48 @@ def _now() -> datetime:  # a seam for tests
     return datetime.now(UTC)
 
 
-@sensor(job=projections_job, minimum_interval_seconds=300,
+@asset(group_name="tracking", deps=["weekly_projections"])
+def sleeper_benchmark(context: AssetExecutionContext) -> MaterializeResult:
+    """Sleeper's own projections for the upcoming week, captured with our pre-kickoff
+    snapshot (raw response kept) and scored in each league's scoring: the benchmark the
+    weekly report compares us against. One small request per kickoff window. A failure
+    is logged and never blocks projections."""
+    con = duck.connect(settings.warehouse_dir, datasets=["schedules"])
+    season = settings.current_season
+    week = projections_mod.upcoming_week(con, season)
+    if week is None:
+        return MaterializeResult(metadata={"week": "none"})
+    try:
+        xw = (
+            duck.connect(settings.warehouse_dir)
+            .sql("select sleeper_id, gsis_id from player_ids")
+            .pl()
+        )
+        path, rows = benchmarks_mod.take(
+            settings.warehouse_dir, season, week, xw, snapshots.kickoffs(con, season, week),
+            _league_scoring(context.log),
+        )  # fmt: skip
+    except Exception as exc:  # unofficial endpoint: report, don't fail the window
+        context.log.warning(f"Sleeper benchmark not captured: {exc}")
+        return MaterializeResult(metadata={"week": week, "benchmark": f"failed: {exc}"})
+    return MaterializeResult(metadata={
+        "week": week, "rows": rows,
+        "benchmark": path.name if path else "unchanged (not written)",
+    })  # fmt: skip
+
+
+prekick_job = define_asset_job(
+    "pre_kickoff_refresh", selection=AssetSelection.assets("weekly_projections",
+                                                           "sleeper_benchmark")
+)  # fmt: skip
+
+
+@sensor(job=prekick_job, minimum_interval_seconds=300,
         default_status=DefaultSensorStatus.RUNNING)  # fmt: skip
 def pre_kickoff_snapshot(context: SensorEvaluationContext):
-    """Fresh projections and a frozen snapshot ~45 minutes before each kickoff window
-    (Thursday, London, Sunday early/late/night, Monday). A missed snapshot means that
-    window can never be scored fairly."""
+    """Fresh projections, a frozen snapshot and Sleeper's benchmark ~45 minutes before
+    each kickoff window (Thursday, London, Sunday early/late/night, Monday). A missed
+    snapshot means that window can never be scored fairly."""
     con = duck.connect(settings.warehouse_dir, datasets=["schedules"])
     season = settings.current_season
     week = projections_mod.upcoming_week(con, season)
@@ -632,6 +669,7 @@ defs = Definitions(
         matchup_model,
         sim_params,
         weekly_projections,
+        sleeper_benchmark,
         actuals,
         eval_results,
     ],
@@ -642,6 +680,7 @@ defs = Definitions(
         leagues_job,
         features_job,
         projections_job,
+        prekick_job,
         status_job,
         tracking_job,
     ],

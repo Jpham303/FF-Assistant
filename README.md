@@ -208,14 +208,15 @@ projected at the time, is left as it was).
 ## Live accuracy tracking
 
 Every week is scored against projections frozen before kickoff (spec: *FF Assistant —
-Projection Evaluation Spec*, Phase 1).
+Projection Evaluation Spec*, Phases 1 and 2).
 
 | Piece | What it does |
 | --- | --- |
 | `projection_snapshots` | Written by every projection run, never overwritten (a new snapshot only when the forecast changed). Per player and league scoring: `expected_points`, `proj_if_active`, p10/p25/p50/p75/p90 and 21 quantiles, play probability, injury status with source and time, kickoff, model version (hash of the fitted files), git commit, and the scoring rules used |
-| `pre_kickoff_snapshot` sensor | Fresh projections and a snapshot ~45 minutes before each kickoff window (Thursday, London, Sunday, Monday) |
+| `pre_kickoff_snapshot` sensor | Fresh projections, a snapshot and Sleeper's benchmark ~45 minutes before each kickoff window (Thursday, London, Sunday, Monday) |
+| `sleeper_benchmark` | Sleeper's own projections (unofficial endpoint, one request per window), raw response kept in `benchmark_raw/`, scored in each league's scoring (Sleeper stat keys × league settings, as Sleeper does) into `benchmark_snapshots`; write-once, skipped when unchanged. A failure is logged and never blocks projections |
 | `actuals` | Stat lines, snaps and an active flag per player-week; Tuesday and Wednesday 5:30 AM CT (after stat corrections) |
-| `eval_results` | Each player scored against the last snapshot taken before his kickoff: MAE if active, MAE on expected points, bias, p10–p90 and p25–p75 coverage, by position, against last-4 and season-average baselines on the same players; writes `data/reports/accuracy_<season>_week<NN>.md` |
+| `eval_results` | Each player scored against the last snapshot taken before his kickoff: MAE if active, MAE on expected points, bias, p10–p90 and p25–p75 coverage, by position, against last-4 and season-average baselines on the same players. Against Sleeper (last capture before kickoff, same players): MAE, rank correlation, start/sit accuracy on close pairs (season averages within 3 points). Misses split into availability misses (50%+ to play and projected 3+ if active, no snap), early exits (under 25% of usual snaps) and model misses; only model misses feed MAE if active, bias and coverage. Chance to play said vs happened by injury status. Writes `data/reports/accuracy_<season>_week<NN>.md` |
 
 `uv run ffa report [--week N]` prints the report. To record the git commit in snapshots,
 build with `FFA_GIT_SHA` set (PowerShell: `$env:FFA_GIT_SHA = git rev-parse --short HEAD`).

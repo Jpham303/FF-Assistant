@@ -130,3 +130,54 @@ def test_sensor_fires_only_shortly_before_a_kickoff(wh, monkeypatch):
     assert runs(THU - timedelta(hours=3)) == []  # too early
     assert runs(THU + timedelta(minutes=5)) == []  # game started: too late to freeze
     assert runs(SUN - timedelta(minutes=10)) == [f"prekick-{SUN.isoformat()}"]
+
+
+def _rows2():
+    """a, d: scored; b: left early (10% of a usual 60%); c: given 50%, sat (availability
+    miss); e: given 10%, sat (as projected)."""
+    return pl.DataFrame({
+        "league": ["default"] * 5, "position": ["RB"] * 5, "key": list("abcde"),
+        "proj_if_active": [10.0, 8.0, 6.0, 5.0, 4.0],
+        "expected_points": [10.0, 8.0, 3.0, 5.0, 0.4],
+        "play_probability": [1.0, 1.0, 0.5, 1.0, 0.1],
+        "injury_status": [None, None, "Questionable", None, "Doubtful"],
+        "p10": [4.0, 3.0, 2.0, 1.0, 1.0], "p25": [7.0, 5.0, 4.0, 3.0, 2.0],
+        "p75": [13.0, 11.0, 8.0, 7.0, 6.0], "p90": [16.0, 14.0, 10.0, 9.0, 8.0],
+        "was_active": [True, True, False, True, False], "actual": [12.0, 2.0, 0.0, 5.0, 0.0],
+        "snap_pct": [0.7, 0.1, None, 0.5, None], "usual_snap_pct": [0.7, 0.6, 0.5, 0.5, 0.2],
+        "last4": [11.0, 9.0, 7.0, 6.0, None], "season_avg": [9.0, 10.0, 6.0, 8.0, None],
+        "sleeper": [9.0, 7.0, 0.0, 6.0, 0.5],
+    })  # fmt: skip
+
+
+def test_phase2_buckets_sleeper_and_availability():
+    r = metrics.metrics(_rows2())
+    a = r.filter(pl.col("scope") == "all")
+    get = {(x["source"], x["metric"]): (x["value"], x["n"]) for x in a.iter_rows(named=True)
+           if x["position"] == "RB"}  # fmt: skip
+    assert get[("misses", "availability_miss")][0] == pytest.approx(0.2)
+    assert get[("misses", "early_exit")][0] == pytest.approx(0.2)
+    assert get[("misses", "model")][0] == pytest.approx(0.4)
+    # Scored on model misses only (a, d); the all-active figure keeps the exit (b).
+    assert get[("model", "mae_if_active")] == (pytest.approx(1.0), 2)
+    assert get[("model", "mae_if_active_all")] == (pytest.approx(8 / 3), 3)
+    assert get[("sleeper", "mae_if_active")] == (pytest.approx(2.0), 2)
+    assert get[("model_vs_sleeper", "mae_expected")][0] == pytest.approx(11.4 / 5)
+    assert get[("sleeper", "mae_expected")][0] == pytest.approx(9.5 / 5)
+    # Close pairs by season average (ab, ac, ad, bd, cd): both miss only b-d.
+    assert get[("model_vs_sleeper", "start_sit")] == (pytest.approx(0.8), 5)
+    assert get[("sleeper", "start_sit")] == (pytest.approx(0.8), 5)
+    assert get[("model_vs_sleeper", "spearman")][0] > 0.5
+    q = {x["metric"]: x["value"] for x in r.iter_rows(named=True)
+         if x["source"] == "availability:Questionable"}  # fmt: skip
+    assert q == {"said": 0.5, "happened": 0.0, "brier": 0.25}
+
+
+def test_report_shows_sleeper_misses_and_availability():
+    res = metrics.metrics(_rows2()).with_columns(
+        pl.lit(2026).alias("season"), pl.lit(8).alias("week"), pl.lit("v").alias("model_version")
+    )
+    md = report.markdown(res, 2026, 8)
+    assert "model / Sleeper" in md and "80.0% / 80.0%" in md
+    assert "| RB | 5 | 20.0% | 20.0% | 40.0% | 20.0% |" in md
+    assert "| Questionable | 1 | 50.0% | 0.0% | 0.250 |" in md
