@@ -153,7 +153,9 @@ report, usually Friday.
   inactives for the noon games; each rebuilds projections right after). Schedules are on
   by default, and the projection run fetches Sleeper itself if its data is missing or
   over a day old. The more severe
-  designation wins: a missed ruling costs far more than a cautious one.
+  designation wins: a missed ruling costs far more than a cautious one. The practice note
+  comes from the official report when it has one, even when Sleeper supplies the
+  designation.
 - **Before the team's first report of the week** (usually until Wednesday), each player's
   designation from the team's previous report is carried forward, at the rate players
   in that spot historically played the next game (Out ~30%, Doubtful ~45%, Questionable
@@ -169,7 +171,10 @@ report, usually Friday.
   not practice [Sleeper, updated Fri Oct 16 4:12 PM CDT; fetched 5:05 PM CDT]". Ruled-out
   players are never recommended and never put in a lineup.
 - **Limit:** inactives announced after the last fetch (late games, Sunday-morning
-  scratches) are not reflected. `/week` says when each source was last fetched.
+  scratches) are not reflected. `/week` says when each source was last fetched, and every
+  player who may not play carries `game_day_check`: when inactives are announced for his
+  game (about 90 minutes before kickoff), so you know when to confirm before lineups lock.
+  Sleeper's once-a-day limit rules out refreshing before each kickoff window.
 
 ## API
 

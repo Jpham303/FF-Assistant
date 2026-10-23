@@ -38,8 +38,8 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    it; never fold availability into the headline. expected_points (= play_probability x
    proj_if_active) is what lineups are ranked by: show it as secondary, labelled as such.
    Players not playing have no if-active projection: list them with 0 and the reason.
-   A player under 100% gets a short line on what to check, e.g. "Questionable: check
-   inactives about 90 minutes before kickoff." `mean` is deprecated: don't use it.
+   A player under 100% comes with `game_day_check` (when inactives are announced for his
+   game): relay it next to his play probability. `mean` is deprecated: don't use it.
    In start/sit, p_a_beats_b counts the chance of sitting; p_a_beats_b_if_both_active is
    talent alone. When they pick different players, relay the note that explains it.
 5. Name the data behind the answer: `sources`, when projections ran, and for every injured

@@ -143,6 +143,11 @@ class Player(BaseModel):
     points_by_rule: dict[str, float] = Field(description="Expected points from each scoring rule")
     drivers: list[str] = Field(description="Plain-language reasons, each with its number")
     p_best: float | None = Field(None, description="Share of simulations this player scores most")
+    game_day_check: str | None = Field(
+        None,
+        description="For a player who may not play: when to confirm he is active "
+        "(inactives ~90 min before kickoff). Statuses are fetched once a day.",
+    )
     # Deprecated (one release): mean == expected_points; the rest include the zeros
     mean: float = Field(description="Deprecated: use expected_points")
     median: float = Field(description="Deprecated: all simulations, zeros included")
@@ -190,6 +195,7 @@ class LineupSlot(BaseModel):
     play_probability: float | None = None
     expected_points: float = Field(0.0, description="What the lineup is chosen by")
     injury_status: str | None = None
+    game_day_check: str | None = None
     mean: float = Field(0.0, description="Deprecated: use expected_points")
     median: float | None = None
 

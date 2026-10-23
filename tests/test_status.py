@@ -353,3 +353,30 @@ def test_questionable_from_sleeper_keeps_the_official_practice_note():
     sp = SimParams(p_play={f"Questionable|{LIMITED}|role": 0.75,
                            "Questionable|any|role": 0.73})  # fmt: skip
     assert sp.play_probability("Questionable", rows[BARKLEY]["practice"], True) == 0.75
+
+
+def test_game_day_check_names_the_inactives_time():
+    ko = datetime(2026, 10, 25, 17, 0, tzinfo=UTC)  # Sun 12:00 PM CDT
+    fri = datetime(2026, 10, 23, 22, 0, tzinfo=UTC)
+    line = startsit.game_day_check(0.75, "Questionable", ko, now=fri)
+    assert line.startswith("Questionable: check inactives")
+    assert "Sun Oct 25 10:30 AM" in line and "once a day" in line
+    assert startsit.game_day_check(1.0, None, ko, now=fri) is None  # healthy
+    assert startsit.game_day_check(0.0, "Out", ko, now=fri) is None  # ruled out
+    assert startsit.game_day_check(0.75, "Questionable", ko, now=ko) is None  # kicked off
+    assert "confirm he is active" in startsit.game_day_check(0.3, None, None)
+
+
+def test_questionable_player_gets_the_check_in_views(warehouse):  # noqa: F811
+    from ffa.scoring.rules import default_rules
+    from ffa.warehouse import duck
+
+    w = startsit.load_week(duck.connect(warehouse), 2026, 6, ["00-A", "00-B"])
+    w.inputs = w.inputs.with_columns(
+        pl.when(pl.col("key") == "00-A").then(0.75).otherwise(1.0).alias("p_play"),
+        pl.when(pl.col("key") == "00-A").then(pl.lit("Questionable"))
+        .otherwise(None).alias("injury_status"),
+    )  # fmt: skip
+    v = startsit.player_views(w, default_rules())
+    assert v["00-A"].game_day_check.startswith("Questionable:")
+    assert v["00-B"].game_day_check is None

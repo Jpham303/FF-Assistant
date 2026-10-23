@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import difflib
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from itertools import permutations
 from zoneinfo import ZoneInfo
 
+import duckdb
 import numpy as np
 import polars as pl
 
@@ -62,6 +63,7 @@ class Week:
     usage: pl.DataFrame | None = None
     absent: pl.DataFrame | None = None
     forced: pl.DataFrame | None = None  # forced-active batches for low play chances
+    kickoffs: dict[str, datetime] = field(default_factory=dict)  # team -> kickoff (UTC)
 
 
 @dataclass
@@ -97,6 +99,9 @@ class PlayerView:
     p10: float = 0.0
     p90: float = 0.0
     p_best: float | None = None
+    # For a player who may not play: when and where to confirm (statuses are fetched once
+    # a day, so a later scratch isn't in the numbers).
+    game_day_check: str | None = None
 
 
 @dataclass
@@ -150,12 +155,18 @@ def load_week(con, season: int, week: int, keys: list[str]) -> Week:
         ).pl()
     except duck.MissingPartition:
         forced = None
+    from ffa.tracking.snapshots import kickoffs  # local: tracking imports this package
+
+    try:  # kickoff times only feed the game-day check: never fail a projection over them
+        ko = {r["team"]: r["kickoff"] for r in kickoffs(con, season, week).iter_rows(named=True)}
+    except duckdb.Error:
+        ko = {}
     return Week(
         season, week,
         get(sims_t, f"and key in ({in_list})"),
         inputs,
         get(teams_t),
-        usage, absent, forced,
+        usage, absent, forced, ko,
     )  # fmt: skip
 
 
@@ -273,6 +284,29 @@ def injury_line(row: dict) -> str | None:
                 f"{injury}{prev} [{provenance(row)}]; plays in {p * 100:.0f}% of simulations. "
                 "Statuses usually come with Friday's final report")  # fmt: skip
     return None
+
+
+INACTIVES_BEFORE = timedelta(minutes=90)
+
+
+def game_day_check(p_play: float, status: str | None, kickoff: datetime | None,
+                   now: datetime | None = None) -> str | None:  # fmt: skip
+    """What to confirm before lineups lock, for a player who may not play (0 < p < 1).
+    Game statuses are fetched once a day (Sleeper's limit), so a scratch announced later
+    isn't in the projection."""
+    if not 0 < p_play < 1:
+        return None
+    what = status or "Not certain to play"
+    if kickoff is None:
+        return (f"{what}: confirm he is active before lineups lock; game statuses here are "
+                "fetched once a day and won't show a later scratch")  # fmt: skip
+    now = now or datetime.now(UTC)
+    if now >= kickoff:
+        return None
+    inactives = kickoff - INACTIVES_BEFORE
+    return (f"{what}: check inactives, announced about 90 minutes before kickoff "
+            f"({when(inactives)}). Game statuses here are fetched once a day and won't "
+            "show a later scratch")  # fmt: skip
 
 
 def _usage_lines(row: dict, position: str, usage: dict | None) -> list[str]:
@@ -443,6 +477,9 @@ def player_views(w: Week, rules: ScoringRules) -> dict[str, PlayerView]:
             points_by_rule={t: round(float(p), 2) for t, p in rule_pts.iter_rows()},
             drivers=drivers(row | {"team": meta["team"]}, team, pos,
                             _usage(g, meta["team"], key, usage, absent)),
+            game_day_check=game_day_check(
+                float(sm["play_probability"]), row.get("injury_status"),
+                w.kickoffs.get(meta["team"])),
             mean=float(sm["expected_points"]), median=float(f.median()),
             p10=float(f.quantile(0.1)), p90=float(f.quantile(0.9)),
         )  # fmt: skip
@@ -553,6 +590,7 @@ def best_lineup(views: dict[str, PlayerView], slots: list[str]) -> list[dict]:
                      "play_probability": round(pick.play_probability, 3),
                      "expected_points": round(pick.expected_points, 2),
                      "injury_status": pick.injury_status,
+                     "game_day_check": pick.game_day_check,
                      "mean": round(pick.expected_points, 2),
                      "median": round(pick.median, 2)}  # fmt: skip
     return [filled[i] for i in range(len(slots))]
