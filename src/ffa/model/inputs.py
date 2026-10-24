@@ -149,11 +149,14 @@ def build(
     models: Models,
     statuses: pl.DataFrame | None = None,
     keep_reserve: bool = False,
+    estimate_week: int | None = None,
 ) -> WeekInputs:
     """`statuses`: game statuses from a second source (see ffa.ingest.status), combined
     with the nflverse report, the more severe winning. `keep_reserve`: keep every
     inactive / reserve-list player, not only recently active ones (rest-of-season
-    projections, where some return later)."""
+    projections, where some return later). `estimate_week`: estimate players and matchup
+    ratings as of this (earlier) week of the same season instead of `week`, so a future
+    week reuses today's estimates rather than treating the same history as staler."""
     teams = _teams(team_games, models, season, week)
     roster = _roster(rosters, season, week).join(
         teams.select("game_id", "team", "opponent"), on="team", how="inner"
@@ -165,16 +168,17 @@ def build(
         roster = roster.filter(
             (pl.col("roster_status") == "ACT") | pl.col("key").is_in(recent["key"].implode())
         )
+    ew = week if estimate_week is None else estimate_week
     to_predict = roster.with_columns(
         pl.lit(season).cast(history["season"].dtype).alias("season"),
-        pl.lit(week).cast(history["week"].dtype).alias("week"),
+        pl.lit(ew).cast(history["week"].dtype).alias("week"),
     )
     pm = models.player
     est = pm.estimates(pm.history(pl.concat([history, to_predict], how="diagonal_relaxed")))
     est_hist = est.filter(
-        (pl.col("season") < season) | ((pl.col("season") == season) & (pl.col("week") < week))
+        (pl.col("season") < season) | ((pl.col("season") == season) & (pl.col("week") < ew))
     )
-    now = est.filter((pl.col("season") == season) & (pl.col("week") == week)).join(
+    now = est.filter((pl.col("season") == season) & (pl.col("week") == ew)).join(
         to_predict.select("key"), on="key", how="semi"
     )
 
@@ -182,7 +186,7 @@ def build(
     dg = defense_games(expectations(est_hist))
     placeholders = teams.select(
         pl.col("game_id"), pl.lit(season).cast(dg["season"].dtype).alias("season"),
-        pl.lit(week).cast(dg["week"].dtype).alias("week"), pl.col("opponent").alias("defense"),
+        pl.lit(ew).cast(dg["week"].dtype).alias("week"), pl.col("opponent").alias("defense"),
     )  # fmt: skip
     ratings = models.matchup.ratings(pl.concat([dg, placeholders], how="diagonal_relaxed"))
     ratings = ratings.join(placeholders.select("game_id", "defense"), on=["game_id", "defense"],

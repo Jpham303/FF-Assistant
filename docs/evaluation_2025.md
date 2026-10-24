@@ -190,7 +190,7 @@ Not met, or not clean:
   season-average pace (interval −23.1 to +5.4), with a −32 point bias. Those QBs averaged
   about 21 points a game when they played, against 18 projected.
 
-Two bugs found and fixed during the backtest:
+Bugs found and fixed during the backtest and the first live run:
 
 - The line fill left future spreads and totals empty. The team-volume model then ran
   future weeks with no lines, cutting projected volume. A guard now refuses to simulate a
@@ -198,6 +198,12 @@ Two bugs found and fixed during the backtest:
 - A player who missed practice after being Out, with no designation yet, was treated as
   healthy for the weeks after. Today's category now comes from this week's full picture:
   the combined designation, or the chance to play when no designation exists yet.
+- Future weeks re-estimated each player as if his history were older (recency weights
+  measured from the projected week), pulling stars toward average: Bijan Robinson slid
+  from 22.6 to 19.4 points if active between weeks 8 and 17 with nothing in his schedule
+  to explain it. Estimates are now made once, as of the current week, and held flat, as
+  the spec says. The table above is from the fixed code (margins within 0.5 points of
+  the earlier run; top-36 RB bias −4.4 → −2.8 in 2024).
 
 ## Known limitations (for Phase 3)
 

@@ -146,6 +146,7 @@ def project(frames: Frames, models: Models, table: dict[str, float], season: int
             season=season, week=w, models=models, team_games=tg, player_games=f.player_games,
             rosters=f.rosters, injuries=f.injuries,
             statuses=f.statuses if current else None, keep_reserve=not current,
+            estimate_week=week,  # today's estimates, held flat (not staler each week)
         )  # fmt: skip
         if inp.teams.height == 0:
             continue
