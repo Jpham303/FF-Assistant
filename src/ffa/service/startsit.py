@@ -22,7 +22,7 @@ from ffa.ingest.ids import normalize_name
 from ffa.leagues.base import SLOT_ELIGIBILITY
 from ffa.scoring import breakdown, score
 from ffa.scoring.rules import ScoringRules
-from ffa.service import ifactive
+from ffa.service import gamestate, ifactive
 from ffa.warehouse import duck
 
 CLOSE_CALL = 0.55  # below this P(A beats B), call it a coin flip
@@ -102,6 +102,10 @@ class PlayerView:
     # For a player who may not play: when and where to confirm (statuses are fetched once
     # a day, so a later scratch isn't in the numbers).
     game_day_check: str | None = None
+    # upcoming / in_progress / final (kickoff + 4 h); None when the kickoff is unknown.
+    # actual_points: what Sleeper has awarded so far (set by the API for league players).
+    game_status: str | None = None
+    actual_points: float | None = None
 
 
 @dataclass
@@ -486,6 +490,7 @@ def player_views(w: Week, rules: ScoringRules) -> dict[str, PlayerView]:
             game_day_check=game_day_check(
                 float(sm["play_probability"]), row.get("injury_status"),
                 w.kickoffs.get(meta["team"])),
+            game_status=gamestate.status(w.kickoffs.get(meta["team"])),
             mean=float(sm["expected_points"]), median=float(f.median()),
             p10=float(f.quantile(0.1)), p90=float(f.quantile(0.9)),
         )  # fmt: skip
@@ -597,10 +602,14 @@ def decision_drivers(w: Week, rules: ScoringRules, views: dict[str, PlayerView],
     ]
 
 
-def compare(w: Week, rules: ScoringRules) -> Comparison:
+def compare(w: Week, rules: ScoringRules, actual: dict[str, float] | None = None) -> Comparison:
     """Start/sit between 2+ players: who to start, how likely each is to outscore the
-    others (from simulations that share each game), and why."""
+    others (from simulations that share each game), and why. `actual`: points awarded so
+    far (players whose games have started)."""
     views = player_views(w, rules)
+    for k, v in views.items():
+        if v.game_status in gamestate.STARTED and actual:
+            v.actual_points = actual.get(k)
     keys = list(views)
     sims = w.sims.with_columns(ifactive.active_flag(w.sims).alias("active"))
     pts = score(sims, rules).select("key", "sim", "fpts", "active")
@@ -622,13 +631,21 @@ def compare(w: Week, rules: ScoringRules) -> Comparison:
                          "median_gap":
                          round(float(np.median(arr[:, a] - arr[:, b])), 2)})  # fmt: skip
     ranked = sorted(views.values(), key=lambda v: v.expected_points, reverse=True)
-    # A ruled-out player is never the recommendation, whatever his mean says.
-    playing = [v for v in ranked if v.play_probability >= OUT_THRESHOLD] or ranked
+    # A ruled-out player, or one whose game has started (his slot is locked), is never the
+    # recommendation, whatever his mean says.
+    playing = [v for v in ranked if v.play_probability >= OUT_THRESHOLD
+               and v.game_status not in gamestate.STARTED] or ranked  # fmt: skip
     ranked = playing + [v for v in ranked if v not in playing]
     top, second = ranked[0], ranked[1] if len(ranked) > 1 else None
     p_top = next((x["p_a_beats_b"] for x in pairwise
                   if second and x["a"] == top.key and x["b"] == second.key), 1.0)  # fmt: skip
     notes = []
+    for v in ranked:
+        if v.game_status in gamestate.STARTED:
+            pts = f" ({v.actual_points:.1f} points)" if v.actual_points is not None else ""
+            what = "is over" if v.game_status == gamestate.FINAL else "has started"
+            notes.append(f"{v.name}'s game {what}{pts}: his lineup slot is locked in Sleeper, "
+                         "so he can't be started or benched now.")  # fmt: skip
     for v in ranked:
         if v.play_probability < OUT_THRESHOLD:
             notes.append(f"{v.name} is ruled OUT or very unlikely to play "
@@ -646,7 +663,8 @@ def compare(w: Week, rules: ScoringRules) -> Comparison:
                          f"includes a {(1 - v.play_probability) * 100:.0f}% chance he sits "
                          f"({v.injury_source or 'nflverse'}, {stamp}).")  # fmt: skip
     notes += disagreements(views, pairwise)
-    close = bool(second and p_top < CLOSE_CALL and second.play_probability >= OUT_THRESHOLD)
+    close = bool(second and p_top < CLOSE_CALL and second.play_probability >= OUT_THRESHOLD
+                 and second.game_status not in gamestate.STARTED)  # fmt: skip
     return Comparison(
         season=w.season, week=w.week, players=ranked, pairwise=pairwise,
         recommendation=top.key, close_call=close, notes=notes,
@@ -687,6 +705,55 @@ def best_lineup(views: dict[str, PlayerView], slots: list[str]) -> list[dict]:
                      "mean": round(pick.expected_points, 2),
                      "median": round(pick.median, 2)}  # fmt: skip
     return [filled[i] for i in range(len(slots))]
+
+
+def _slot_row(slot: str, v: PlayerView | None, *, locked: bool, actual: float | None,
+              status: str | None, name: str | None = None) -> dict:  # fmt: skip
+    """A lineup slot. A final game counts its awarded points; otherwise the projection."""
+    final = status == gamestate.FINAL and actual is not None
+    exp = actual if final else (v.expected_points if v else 0.0)
+    return {
+        "slot": slot, "key": v.key if v else None, "name": v.name if v else name,
+        "proj_if_active": v.proj_if_active if v else None,
+        "p10_if_active": v.p10_if_active if v else None,
+        "p90_if_active": v.p90_if_active if v else None,
+        "play_probability": round(v.play_probability, 3) if v else None,
+        "expected_points": round(float(exp), 2),
+        "injury_status": v.injury_status if v else None,
+        "game_day_check": None if locked or not v else v.game_day_check,
+        "locked": locked, "game_status": status, "actual_points": actual,
+        "mean": round(float(exp), 2), "median": round(v.median, 2) if v else None,
+    }  # fmt: skip
+
+
+def locked_lineup(views: dict[str, PlayerView], slots: list[str],
+                  set_starters: list[str | None], status: dict[str, str | None],
+                  actual: dict[str, float], *, force: str | None = None,
+                  exclude: frozenset[str] = frozenset(),
+                  names: dict[str, str] | None = None) -> list[dict]:  # fmt: skip
+    """The lineup as it can still be: slots whose set starter's game has kicked off are
+    locked to him (as set in Sleeper); the open slots get the best lineup from players
+    whose games haven't started. `force` puts a player in an open slot (start/sit odds);
+    `exclude` keeps players out (the other candidates)."""
+    started = {k for k, st in status.items() if st in gamestate.STARTED}
+    locked = {i: k for i, k in enumerate(set_starters) if k and k in started}
+    open_idx = [i for i in range(len(slots)) if i not in locked]
+    pool = {k: v for k, v in views.items()
+            if k not in started and k not in exclude and k not in locked.values()}  # fmt: skip
+    if force is not None and force in pool:
+        from dataclasses import replace
+
+        pool[force] = replace(pool[force], expected_points=1e9)
+    fill = best_lineup(pool, [slots[i] for i in open_idx]) if open_idx else []
+    out: dict[int, dict] = {}
+    for i, k in locked.items():
+        out[i] = _slot_row(slots[i], views.get(k), locked=True, actual=actual.get(k),
+                           status=status.get(k), name=(names or {}).get(k, k))  # fmt: skip
+    for i, row in zip(open_idx, fill, strict=True):
+        v = views.get(row["key"]) if row["key"] else None
+        out[i] = _slot_row(row["slot"], v, locked=False, actual=None,
+                           status=status.get(row["key"]) if row["key"] else None)  # fmt: skip
+    return [out[i] for i in range(len(slots))]
 
 
 def as_dict(obj) -> dict:

@@ -20,7 +20,7 @@ from ffa import __version__
 from ffa.config import settings
 from ffa.db.models import LeagueRow, RosterEntryRow, TeamRow
 from ffa.scoring.rules import ScoringRules, default_rules, from_sleeper
-from ffa.service import availability, fantasy_matchup, ros, startsit
+from ffa.service import availability, fantasy_matchup, gamestate, ros, startsit
 from ffa.service.projections import latest_sleeper_status, upcoming_week
 from ffa.warehouse import duck
 
@@ -143,6 +143,10 @@ class Player(BaseModel):
     points_by_rule: dict[str, float] = Field(description="Expected points from each scoring rule")
     drivers: list[str] = Field(description="Plain-language reasons, each with its number")
     p_best: float | None = Field(None, description="Share of simulations this player scores most")
+    game_status: str | None = Field(None, description="upcoming, in_progress or final")
+    actual_points: float | None = Field(
+        None, description="Points Sleeper has awarded so far (league players, game started)"
+    )
     game_day_check: str | None = Field(
         None,
         description="For a player who may not play: when to confirm he is active "
@@ -209,6 +213,10 @@ class LineupSlot(BaseModel):
     expected_points: float = Field(0.0, description="What the lineup is chosen by")
     injury_status: str | None = None
     game_day_check: str | None = None
+    locked: bool = Field(False, description="His game has kicked off: the slot is as set in "
+                         "Sleeper and can't change")  # fmt: skip
+    game_status: str | None = Field(None, description="upcoming, in_progress or final")
+    actual_points: float | None = Field(None, description="Points Sleeper has awarded so far")
     mean: float = Field(0.0, description="Deprecated: use expected_points")
     median: float | None = None
 
@@ -232,6 +240,13 @@ class MyTeam(BaseModel):
     week: int
     scoring: str
     lineup: list[LineupSlot]
+    lineup_total: float = Field(
+        0.0,
+        description="Expected lineup points: awarded points for final games, projections "
+        "for the rest (matches the matchup odds)",
+    )
+    points_so_far: float = Field(0.0, description="Points Sleeper has awarded to locked slots")
+    notes: list[str] = Field(default_factory=list)
     bench: list[Player]
     not_playing: list[NotPlayingOut] = Field(
         description="Rostered players who won't play this week, each with a reason (bye, "
@@ -383,8 +398,12 @@ def start_sit(req: StartSitRequest, con=Depends(get_con), db=Depends(get_db)) ->
     rules, label = _rules(_league(db, req.league))
     if len(set(req.players)) != len(req.players):
         raise HTTPException(422, "Duplicate players")
-    c = startsit.compare(_views(con, req.players, rules, season, w), rules)
     row = _league(db, req.league)
+    awarded = {}
+    if row is not None and db is not None:
+        lw = gamestate.league_week(db, row, w)
+        awarded = lw.points() if lw.available else {}
+    c = startsit.compare(_views(con, req.players, rules, season, w), rules, actual=awarded)
     if row is not None and db is not None:
         odds = fantasy_matchup.win_odds(con, db, row, season, w, req.players, rules)
         c = fantasy_matchup.apply_tiebreak(c, odds)
@@ -426,8 +445,27 @@ def my_team(league: str, week: int | None = None, con=Depends(get_con),
     keys = [e.player_key for e in entries if e.player_key and e.slot_type != "ir"]
     data = startsit.load_week(con, season, w, keys)
     views = startsit.player_views(data, rules)
-    lineup = startsit.best_lineup(views, row.lineup_slots)
+    # Games that have kicked off lock their slots as set in Sleeper; final ones count the
+    # points awarded. Same rule as the matchup odds, so the two totals agree.
+    lw = gamestate.league_week(db, row, w)
+    awarded = lw.points() if lw.available else {}
+    for k, v in views.items():
+        if v.game_status in gamestate.STARTED:
+            v.actual_points = awarded.get(k)
+    n = len(row.lineup_slots)
+    set_starters = lw.starters(lw.my_entry, n) if lw.available and lw.my_entry else [None] * n
+    names = {e.player_key: e.name or e.platform_player_id for e in entries if e.player_key}
+    lineup = startsit.locked_lineup(
+        views, row.lineup_slots, set_starters,
+        {k: v.game_status for k, v in views.items()}, awarded, names=names,
+    )  # fmt: skip
     starters = {s["key"] for s in lineup}
+    notes = []
+    if not lw.available and any(v.game_status in gamestate.STARTED for v in views.values()):
+        notes.append(
+            f"Some games have started, but your Sleeper lineup couldn't be read "
+            f"({lw.reason}): locked slots and points so far aren't reflected."
+        )
     bench = sorted(
         (v for k, v in views.items()
          if k not in starters and v.play_probability >= startsit.OUT_THRESHOLD),
@@ -457,6 +495,9 @@ def my_team(league: str, week: int | None = None, con=Depends(get_con),
     return MyTeam(
         league=row.id, team=team.name, season=season, week=w, scoring=label,
         lineup=[LineupSlot(**s) for s in lineup],
+        lineup_total=round(sum(s["expected_points"] for s in lineup), 2),
+        points_so_far=round(sum(s["actual_points"] or 0 for s in lineup if s["locked"]), 2),
+        notes=notes,
         bench=[Player(**startsit.as_dict(v)) for v in bench],
         not_playing=[NotPlayingOut(**r.as_dict()) for r in sorted(out, key=lambda r: r.name)],
     )  # fmt: skip

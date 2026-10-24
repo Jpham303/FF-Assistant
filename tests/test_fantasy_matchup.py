@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import polars as pl
 import pytest
 
 from ffa.db.models import RosterEntryRow, TeamRow
 from ffa.scoring.rules import from_sleeper
 from ffa.service import fantasy_matchup as fm
-from ffa.service import startsit
+from ffa.service import gamestate, startsit
 from ffa.warehouse import duck
 from tests.test_api import SEASON, WEEK, client, db, warehouse  # noqa: F401  (fixtures)
 
@@ -57,7 +58,14 @@ def test_best_lineup_when_none_set_and_no_matchup(warehouse, league):  # noqa: F
     assert not o["available"] and "No fantasy matchup" in o["reason"]
 
 
-def test_finished_games_count_with_awarded_points(warehouse, league, monkeypatch):  # noqa: F811
+def test_started_starters_are_locked_and_final_ones_count_awarded_points(
+    warehouse,  # noqa: F811
+    league,
+    monkeypatch,
+):
+    """DAL (Alpha, Charlie, Quinn) kicked off; JAX (Bravo, Delta) hasn't. Charlie is a set
+    starter: once his game starts his slot is locked, and once it's final his 30 awarded
+    points replace his projection, whoever else starts."""
     db_, row, rules = league
     real = startsit.load_week
     ko = datetime(2026, 10, 15, 0, 15, tzinfo=UTC)
@@ -69,14 +77,46 @@ def test_finished_games_count_with_awarded_points(warehouse, league, monkeypatch
 
     monkeypatch.setattr(startsit, "load_week", with_kickoffs)
     con = duck.connect(warehouse)
-    before = fm.win_odds(con, db_, row, SEASON, WEEK, ["00-C", "00-D"], rules,
-                         matchups=MATCHUPS, now=ko + timedelta(hours=1))  # fmt: skip
-    after = fm.win_odds(con, db_, row, SEASON, WEEK, ["00-C", "00-D"], rules,
+    live = fm.win_odds(con, db_, row, SEASON, WEEK, ["00-C", "00-D"], rules,
+                       matchups=MATCHUPS, now=ko + timedelta(hours=1))  # fmt: skip
+    final = fm.win_odds(con, db_, row, SEASON, WEEK, ["00-C", "00-D"], rules,
                         matchups=MATCHUPS, now=ko + timedelta(hours=5))  # fmt: skip
-    assert before["final_games_counted"] == [] and after["final_games_counted"] == ["DAL"]
-    c_before = next(c for c in before["candidates"] if c["key"] == "00-C")
-    c_after = next(c for c in after["candidates"] if c["key"] == "00-C")
-    assert c_after["my_expected"] > c_before["my_expected"]  # his 30 awarded points count
+    assert live["final_games_counted"] == [] and final["final_games_counted"] == ["DAL"]
+    c = {x["key"]: x for x in final["candidates"]}
+    assert c["00-C"]["p_win"] is None and "locked" in c["00-C"]["note"]
+    d_live = next(x for x in live["candidates"] if x["key"] == "00-D")
+    d_final = c["00-D"]
+    assert d_final["my_expected"] > d_live["my_expected"]  # Charlie's 30 now counts
+
+
+def test_my_team_total_matches_the_matchup(client, league, monkeypatch):  # noqa: F811
+    """The lineup view and the win odds use the same rule: locked slots as set, final
+    games at their awarded points."""
+    real = startsit.load_week
+    ko = datetime(2026, 10, 15, 0, 15, tzinfo=UTC)
+
+    def with_kickoffs(*a, **k):
+        w = real(*a, **k)
+        w.kickoffs = {"DAL": ko, "JAX": ko + timedelta(days=3)}
+        return w
+
+    monkeypatch.setattr(startsit, "load_week", with_kickoffs)
+    monkeypatch.setattr(gamestate, "fetch_matchups", lambda *_a, **_k: MATCHUPS)
+    monkeypatch.setattr(
+        gamestate,
+        "status",
+        lambda kickoff, now=None: (
+            None if kickoff is None else ("final" if kickoff == ko else "upcoming")
+        ),
+    )
+    t = client.get("/leagues/sleeper:1/my-team").json()
+    slots = {s["slot"]: s for s in t["lineup"]}
+    charlie = next(s for s in t["lineup"] if s["key"] == "00-C")
+    assert charlie["locked"] and charlie["game_status"] == "final"
+    assert charlie["expected_points"] == 30.0 and charlie["actual_points"] == 30.0
+    assert t["points_so_far"] == 30.0
+    assert t["lineup_total"] == pytest.approx(sum(s["expected_points"] for s in t["lineup"]))
+    assert "QB" in slots
 
 
 def _close_call(warehouse):  # noqa: F811
@@ -114,10 +154,25 @@ def test_tiebreaker_ignores_noise_and_unavailable_odds(warehouse):  # noqa: F811
 
 
 def test_api_start_sit_reports_gap_drivers_and_matchup(client, league, monkeypatch):  # noqa: F811
-    monkeypatch.setattr(fm, "fetch_matchups", lambda *_a, **_k: MATCHUPS)
+    monkeypatch.setattr(gamestate, "fetch_matchups", lambda *_a, **_k: MATCHUPS)
     r = client.post("/start-sit", json={"players": ["00-C", "00-D"], "league": "sleeper:1"})
     assert r.status_code == 200, r.text
     d = r.json()
     assert d["pairwise"][0]["median_gap"] is not None
     assert d["decision_drivers"] and {"factor", "points", "favors"} <= set(d["decision_drivers"][0])
     assert d["matchup"]["available"] and d["matchup"]["opponent"] == "Theirs"
+
+
+def test_start_sit_never_picks_a_player_whose_game_started(warehouse, monkeypatch):  # noqa: F811
+    con = duck.connect(warehouse)
+    w = startsit.load_week(con, SEASON, WEEK, ["00-C", "00-D"])
+    rules = from_sleeper({"rec": 1.0, "rec_yd": 0.1, "rec_td": 6})
+    best = startsit.compare(w, rules).recommendation
+    other = "00-D" if best == "00-C" else "00-C"
+    team = w.inputs.filter(pl.col("key") == best)["team"][0]
+    monkeypatch.setattr(gamestate, "status", lambda kickoff, now=None:
+                        "final" if kickoff == "KO" else "upcoming")  # fmt: skip
+    w.kickoffs = {team: "KO"}
+    c = startsit.compare(w, rules, actual={best: 21.5})
+    assert c.recommendation == other and not c.close_call
+    assert any("game is over (21.5 points)" in n and "locked" in n for n in c.notes)

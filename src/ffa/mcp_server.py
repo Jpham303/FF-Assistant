@@ -68,6 +68,10 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    instead of guessing. Report per_game_if_active (points a game when he plays) next to
    the total (expected after injury risk; expected_games of the remaining games), and
    the playoff-week total. Opponents come from the official schedule in the tool.
+10. Games that have kicked off are locked in Sleeper: my_team shows those slots as the
+   user set them (locked=true), final games with their actual points; lineup_total
+   (actual + projected) is what the matchup odds use, points_so_far what's banked. Never
+   suggest moving a locked player; in start/sit, relay the note when one is locked.
 """
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
