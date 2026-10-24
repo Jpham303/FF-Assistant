@@ -199,7 +199,9 @@ def player_projections(players: list[str], league: str | None = None,
     """Projection and reasoning for one or more players: proj_if_active with its range
     (the headline: points if he plays), play_probability and injury status beside it,
     expected_points (= play_probability x proj_if_active, what lineups rank by), expected
-    stats if active, points by scoring rule, and drivers.
+    stats if active, points by scoring rule, drivers, and rest_of_season (expected points
+    for every remaining week through the fantasy championship, the total and the playoff-
+    week total; for trade questions, rest of season is what matters).
     Accepts names or keys; unresolved names come back as `unresolved`."""
     try:
         keys, problems = _resolve(players, week)

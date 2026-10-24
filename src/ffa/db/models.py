@@ -30,6 +30,8 @@ class LeagueRow(Base):
     taxi_slots: Mapped[int] = mapped_column(Integer)
     scoring: Mapped[dict[str, float]] = mapped_column(JSON)
     unsupported_slots: Mapped[list[str]] = mapped_column(JSON)
+    # Season settings: playoff_week_start, playoff_teams, playoff_round_type, ...
+    settings: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     teams: Mapped[list[TeamRow]] = relationship(

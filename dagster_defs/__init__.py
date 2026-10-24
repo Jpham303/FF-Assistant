@@ -31,6 +31,7 @@ from ffa.features.games import load_pbp as load_game_pbp
 from ffa.ingest import ids, nflverse
 from ffa.leagues import sync
 from ffa.leagues.sleeper import SleeperAdapter
+from ffa.model import horizon as horizon_mod
 from ffa.model import matchup as matchup_mod
 from ffa.model import player as player_model_mod
 from ffa.model import sim_params as sim_params_mod
@@ -38,6 +39,7 @@ from ffa.model import team as team_model
 from ffa.scoring.defense import dst_stat_lines
 from ffa.scoring.defense import load_pbp as load_dst_pbp
 from ffa.service import projections as projections_mod
+from ffa.service import ros as ros_mod
 from ffa.tracking import actuals as actuals_mod
 from ffa.tracking import benchmarks as benchmarks_mod
 from ffa.tracking import report as report_mod
@@ -465,6 +467,94 @@ def sim_params(context: AssetExecutionContext) -> MaterializeResult:
     )
 
 
+@asset(group_name="models", deps=["rosters", "injuries", "player_games", "team_games"])
+def availability_horizon(context: AssetExecutionContext) -> MaterializeResult:
+    """How often players in each spot (healthy, Questionable, Out, IR...) play their team's
+    k-th game from now, by position and role: the chance to play beyond this week, for
+    rest-of-season projections. Fitted on every completed season."""
+    import json
+
+    con = duck.connect(settings.warehouse_dir)
+    last = settings.current_season - 1
+    rng = f"season between 2016 and {last}"
+    table = horizon_mod.fit(
+        con.sql(f"select * from rosters where {rng}").pl(),
+        con.sql(f"select * from injuries where {rng} and game_type = 'REG'").pl(),
+        con.sql(f"select * from player_games where {rng}").pl(),
+        con.sql(f"select season, week, team, game_type from team_games where {rng}").pl(),
+    )  # fmt: skip
+    out = Path(settings.models_dir) / "horizon.json"
+    out.write_text(json.dumps(table, indent=1, sort_keys=True))
+    return MaterializeResult(metadata={"cells": len(table), "seasons": f"2016-{last}"})
+
+
+def _league_settings(log) -> dict[str, dict]:
+    """league id -> season settings (playoff weeks); empty when the DB is unavailable."""
+    try:
+        db = db_session()
+    except Exception as exc:
+        log.warning(f"App database unavailable; default season length: {exc}")
+        return {}
+    try:
+        from sqlalchemy import select
+
+        from ffa.db.models import LeagueRow
+
+        return {r.id: dict(r.settings or {}) for r in db.scalars(select(LeagueRow))}
+    finally:
+        db.close()
+
+
+@asset(group_name="projections", deps=["weekly_projections", "availability_horizon"])
+def ros_projections(context: AssetExecutionContext) -> MaterializeResult:
+    """Rest-of-season projections: every remaining week through each league's fantasy
+    championship, scored in each league's rules, frozen as a dated snapshot. Future lines
+    come from team ratings; chance to play from the availability horizon."""
+    import json
+
+    con = duck.connect(settings.warehouse_dir)
+    season = settings.current_season
+    week = projections_mod.upcoming_week(con, season)
+    if week is None:
+        return MaterializeResult(metadata={"week": "none"})
+    hfile = Path(settings.models_dir) / "horizon.json"
+    if not hfile.exists():
+        raise FileNotFoundError("models/horizon.json missing: materialize availability_horizon")
+    table = json.loads(hfile.read_text())
+    scoring = _league_scoring(context.log)
+    league_set = _league_settings(context.log)
+    last = {lg: int(league_set.get(lg, {}).get("last_week") or ros_mod.DEFAULT_LAST_WEEK)
+            for lg in scoring}  # fmt: skip
+    q = lambda t: con.sql(f"select * from {t} where season <= {season}").pl()  # noqa: E731
+    frames = ros_mod.Frames(
+        q("team_games"), q("player_games"),
+        con.sql(f"select * from rosters where season = {season}").pl(),
+        con.sql(f"select * from injuries where season = {season}").pl(),
+        projections_mod.latest_sleeper_status(con, season, week)[0],
+    )  # fmt: skip
+    df = ros_mod.project(frames, projections_mod.load_models(settings.models_dir), table,
+                         season, week, max(last.values()), scoring)  # fmt: skip
+    df = ros_mod.trim_to_leagues(df, last, league_set)
+    store.write(df.with_columns(pl.col("as_of_week").alias("week")), settings.warehouse_dir,
+                ros_mod.DATASET, volatile=True)  # fmt: skip
+    return MaterializeResult(metadata={
+        "as_of_week": week, "rows": df.height, "leagues": len(scoring),
+        "through_week": str(last),
+    })  # fmt: skip
+
+
+ros_job = define_asset_job("ros_refresh", selection=AssetSelection.assets("ros_projections"))
+
+
+# Daily, after the status fetch has refreshed this week's projections (Sunday: after the
+# morning status run).
+@schedule(job=ros_job, cron_schedule=["45 17 * * 1-6", "15 11 * * 0"],
+          execution_timezone="America/Chicago",
+          default_status=DefaultScheduleStatus.RUNNING)  # fmt: skip
+def daily_ros(context: ScheduleEvaluationContext):
+    return RunRequest(run_key=f"ros-{context.scheduled_execution_time}")
+
+
 @asset(
     group_name="projections",
     deps=["sim_params", "matchup_model", "team_games", "player_games", "injuries", "rosters",
@@ -669,6 +759,8 @@ defs = Definitions(
         matchup_model,
         sim_params,
         weekly_projections,
+        availability_horizon,
+        ros_projections,
         sleeper_benchmark,
         actuals,
         eval_results,
@@ -680,6 +772,7 @@ defs = Definitions(
         leagues_job,
         features_job,
         projections_job,
+        ros_job,
         prekick_job,
         status_job,
         tracking_job,
@@ -693,6 +786,7 @@ defs = Definitions(
         hourly_projections,
         daily_status,
         sunday_status,
+        daily_ros,
         weekly_tracking,
     ],
     sensors=[pre_kickoff_snapshot],

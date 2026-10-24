@@ -20,7 +20,7 @@ from ffa import __version__
 from ffa.config import settings
 from ffa.db.models import LeagueRow, RosterEntryRow, TeamRow
 from ffa.scoring.rules import ScoringRules, default_rules, from_sleeper
-from ffa.service import availability, fantasy_matchup, startsit
+from ffa.service import availability, fantasy_matchup, ros, startsit
 from ffa.service.projections import latest_sleeper_status, upcoming_week
 from ffa.warehouse import duck
 
@@ -340,7 +340,9 @@ def projections(
     rules, _ = _rules(_league(db, league))
     ks = [k.strip() for k in keys.split(",") if k.strip()]
     views = startsit.player_views(_views(con, ks, rules, season, w), rules)
-    return [Player(**startsit.as_dict(views[k])) for k in ks]
+    row = _league(db, league)
+    rest = ros.summary(ros.latest(con, season, w), ks, row.id if row is not None else None)
+    return [Player(**startsit.as_dict(views[k]), rest_of_season=rest.get(k)) for k in ks]
 
 
 @app.post("/start-sit", response_model=StartSitResponse)

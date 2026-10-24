@@ -205,6 +205,19 @@ format change, regenerate stored weeks: `uv run ffa rebuild-projections --dry-ru
 them, without `--dry-run` rebuilds them (projection_history, the record of what was
 projected at the time, is left as it was).
 
+## Rest of season
+
+`ros_projections` (daily at 5:45 PM CT, Sunday at 11:15 AM) projects every remaining week
+through each synced league's fantasy championship, scored in that league's rules, and
+keeps each run as a dated snapshot. Lines for future games come from team ratings fitted
+on the lines posted so far. Each future week's chance to play comes from
+`availability_horizon` (`data/models/horizon.json`): how often players in the same spot
+today (healthy, Questionable, Out, IR...) play their team's k-th game from now, by
+position and role. `GET /projections` carries `rest_of_season` for each player: the
+total, the playoff-week total and every week. The 2025 backtest is in
+`docs/evaluation_2025.md`. League playoff weeks come from Sleeper's league settings
+(stored at sync; the database migrates itself on `docker compose up`).
+
 ## Live accuracy tracking
 
 Every week is scored against projections frozen before kickoff (spec: *FF Assistant —

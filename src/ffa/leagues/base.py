@@ -84,6 +84,9 @@ class League(BaseModel):
     scoring: dict[str, float]  # raw platform scoring keys; translated in ffa.scoring
     unsupported_slots: list[str] = Field(default_factory=list)  # e.g. IDP slots
     teams: list[Team]
+    # Season settings: playoff_week_start, playoff_teams, playoff_round_type (Sleeper:
+    # 0 one week per round, 1 two-week final, 2 two weeks per round), last_week
+    settings: dict = Field(default_factory=dict)
 
     @property
     def uid(self) -> str:

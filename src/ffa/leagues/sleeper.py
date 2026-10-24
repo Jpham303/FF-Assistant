@@ -51,6 +51,19 @@ class SleeperClient:
         return data
 
 
+def season_settings(settings: dict) -> dict:
+    """Playoff structure from Sleeper league settings, plus the last fantasy week."""
+    start = settings.get("playoff_week_start")
+    teams = settings.get("playoff_teams")
+    rtype = settings.get("playoff_round_type", 0) or 0
+    out = {"playoff_week_start": start, "playoff_teams": teams, "playoff_round_type": rtype}
+    if start and teams:
+        rounds = max(1, (int(teams) - 1).bit_length())  # 4 -> 2, 6 -> 3, 8 -> 3, 12 -> 4
+        weeks = rounds * 2 if rtype == 2 else rounds + (1 if rtype == 1 else 0)
+        out["last_week"] = int(start) + weeks - 1
+    return out
+
+
 def _is_defense(pid: str) -> bool:
     return pid.isalpha()
 
@@ -135,6 +148,7 @@ class SleeperAdapter:
             scoring={k: float(v) for k, v in (lg.get("scoring_settings") or {}).items()},
             unsupported_slots=unsupported,
             teams=teams,
+            settings=season_settings(settings),
         )
 
     def _team(self, r: dict, owner: dict, lineup: list[str], *, is_me: bool) -> Team:

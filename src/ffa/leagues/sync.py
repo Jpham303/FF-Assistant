@@ -105,6 +105,7 @@ def store(league: League, db: Session, *, now: datetime | None = None) -> None:
             taxi_slots=league.taxi_slots,
             scoring=league.scoring,
             unsupported_slots=league.unsupported_slots,
+            settings=league.settings,
             synced_at=now,
         )
     )

@@ -139,11 +139,73 @@ Well calibrated, slightly overconfident above 70%.
   because these rows are conditioned on the backup playing, which the old random starts
   happened to anticipate.
 
+## Rest of season (Oct 2026)
+
+Trade decisions need every remaining week, not just the next one. Rest-of-season
+projections run the weekly model forward with two additions:
+
+- **Team ratings** (`ffa.model.ratings`) give future games their lines: each team's
+  offense and defense, plus home field, fitted by weighted ridge regression on this
+  season's posted implied totals (weight 0.6 per week back, ridge 0.3, chosen on 2024).
+  For games 2+ weeks ahead, their implied totals miss the eventual closing line by
+  2.0 / 2.3 / 2.4 points on average in 2023 / 2024 / 2025. A team's average implied total
+  so far misses by 2.5 / 2.6 / 2.9. **The 1.5-point target proposed in the trade engine
+  spec was not met.** Lines that far out move with injuries and news no model has yet,
+  and tuning plateaued near 2.3.
+- **Availability horizon** (`ffa.model.horizon`): how often players in each spot today
+  play their team's k-th game from now (k = 1-8, byes skipped). Spots: healthy,
+  Questionable, Doubtful, Out, inactive, or reserve list (IR, PUP, NFI). Split by
+  position and role: top producer (top 12 QB/TE, top 36 RB/WR by points per game),
+  starter (70%+ of snaps), role player (30-70%), depth. Fitted on every completed season.
+  For example (2016-2025 fit), a player who is Out today plays his team's next game 29%
+  of the time and the one after 47%. A starting WR on a reserve list plays 7% of the next
+  game and 33% eight games out.
+
+Backtest: from weeks 4, 8 and 12, each player's projected points for the rest of the
+season through week 17 (standard half-PPR), against what happened. Missed games count
+as 0. Baselines: points per game so far × team games left (season-average pace), and
+the same for the last 4 games (last-4 pace). Only data known at the cutoff week was used;
+lines after it were masked. 2024 was used for tuning, 2025 is the holdout. MAE of the
+rest-of-season total; edge = baseline MAE − model MAE, with a 95% bootstrap interval.
+
+Fantasy-relevant players (top 12 QB/TE, top 36 RB/WR by points per game at the cutoff),
+2025 holdout:
+
+| Pos | Model MAE | Edge vs season-avg pace | Edge vs last-4 pace | Rank corr. model / season-avg / last-4 |
+| --- | --- | --- | --- | --- |
+| QB | 40.7 | +15.7 [+1.6, +31.6] | +18.6 [+2.5, +34.4] | 0.22 / 0.20 / 0.30 |
+| RB | 31.8 | +7.5 [+2.1, +12.7] | +10.3 [+4.9, +15.8] | 0.69 / 0.53 / 0.50 |
+| WR | 29.0 | +18.0 [+11.7, +24.3] | +19.3 [+12.9, +25.9] | 0.51 / 0.19 / 0.28 |
+| TE | 20.5 | +18.8 [+7.4, +30.5] | +23.3 [+12.5, +34.1] | 0.53 / −0.06 / −0.03 |
+
+All players with 2+ games: the model wins at every position in 2025, by 4.8 to 14.5
+points, every interval above zero. **Gate passed:** the trade engine was cleared to
+build on these projections only if they beat season-average pace on the 2025 holdout.
+
+Not met, or not clean:
+
+- 2025 top-12 QB ranking: last-4 pace ranked them better (0.30 vs 0.22; 36 player-cutoffs,
+  noisy). The proposed criterion "higher rank correlation than both paces" fails in this cell.
+- 2024 (tuning season) top-12 QBs: the model's error was 8.6 points larger than
+  season-average pace (interval −23.1 to +5.4), with a −32 point bias. Those QBs averaged
+  about 21 points a game when they played, against 18 projected.
+
+Two bugs found and fixed during the backtest:
+
+- The line fill left future spreads and totals empty. The team-volume model then ran
+  future weeks with no lines, cutting projected volume. A guard now refuses to simulate a
+  game without lines.
+- A player who missed practice after being Out, with no designation yet, was treated as
+  healthy for the weeks after. Today's category now comes from this week's full picture:
+  the combined designation, or the chance to play when no designation exists yet.
+
 ## Known limitations (for Phase 3)
 
 - Win probabilities above 70% run 2–4 points high; recalibrate on 2024 and recheck.
 - QB ranges: 16% of 2025 starter outcomes fell below p10 (target 10%). Fit the exit rate
   on recent seasons and check QB scoring dispersion on 2024.
+- Rest of season: player shares and efficiency are held flat (no role trends), and the
+  availability horizon doesn't know injury type or how long a player has been on IR.
 - Practice trend (Wednesday-Friday) isn't used: nflverse keeps only the latest practice
   status. Our daily snapshots will allow fitting it after a season.
 - Kickers: better than the season average but not significantly.

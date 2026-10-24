@@ -148,9 +148,12 @@ def build(
     injuries: pl.DataFrame,
     models: Models,
     statuses: pl.DataFrame | None = None,
+    keep_reserve: bool = False,
 ) -> WeekInputs:
     """`statuses`: game statuses from a second source (see ffa.ingest.status), combined
-    with the nflverse report, the more severe winning."""
+    with the nflverse report, the more severe winning. `keep_reserve`: keep every
+    inactive / reserve-list player, not only recently active ones (rest-of-season
+    projections, where some return later)."""
     teams = _teams(team_games, models, season, week)
     roster = _roster(rosters, season, week).join(
         teams.select("game_id", "team", "opponent"), on="team", how="inner"
@@ -158,9 +161,10 @@ def build(
 
     history = _before(player_games, season, week)
     recent = _recently_played(history, roster)
-    roster = roster.filter(
-        (pl.col("roster_status") == "ACT") | pl.col("key").is_in(recent["key"].implode())
-    )
+    if not keep_reserve:
+        roster = roster.filter(
+            (pl.col("roster_status") == "ACT") | pl.col("key").is_in(recent["key"].implode())
+        )
     to_predict = roster.with_columns(
         pl.lit(season).cast(history["season"].dtype).alias("season"),
         pl.lit(week).cast(history["week"].dtype).alias("week"),

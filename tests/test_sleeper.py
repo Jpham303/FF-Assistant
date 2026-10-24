@@ -196,3 +196,13 @@ def test_migrations_match_models(tmp_path):
         ctx = MigrationContext.configure(conn, opts={"version_table": "ffa_alembic_version"})
         diff = compare_metadata(ctx, Base.metadata)
     assert diff == []
+
+
+def test_season_settings_last_fantasy_week():
+    from ffa.leagues.sleeper import season_settings
+
+    assert season_settings({"playoff_week_start": 15, "playoff_teams": 6})["last_week"] == 17
+    assert season_settings({"playoff_week_start": 15, "playoff_teams": 4})["last_week"] == 16
+    two_week_final = {"playoff_week_start": 15, "playoff_teams": 4, "playoff_round_type": 1}
+    assert season_settings(two_week_final)["last_week"] == 17
+    assert "last_week" not in season_settings({})
