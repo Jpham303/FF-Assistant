@@ -64,7 +64,10 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    similarly named player.
 9. Rest of season, the remaining schedule, playoff weeks, "how will X do the rest of the
    year", dynasty-free trade value: call rest_of_season. Never answer these from web
-   search or memory; if the tool returns an error, relay it instead of guessing.
+   search or memory; if the tool returns an error or times out, say so and retry once
+   instead of guessing. Report per_game_if_active (points a game when he plays) next to
+   the total (expected after injury risk; expected_games of the remaining games), and
+   the playoff-week total. Opponents come from the official schedule in the tool.
 """
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)

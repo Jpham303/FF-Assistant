@@ -248,6 +248,11 @@ def summary(snap: pl.DataFrame, keys: list[str], league: str | None) -> dict[str
             "key": key, "name": first.get("name"), "position": first.get("position"),
             "team": first.get("team"),
             "total": round(float(g["expected_points"].sum()), 1),
+            # Points per game if he plays every remaining game (availability left out).
+            "per_game_if_active": round(float(g["proj_if_active"].mean()), 1)
+            if "proj_if_active" in g.columns and g["proj_if_active"].is_not_null().any()
+            else None,
+            "expected_games": round(float(g["play_probability"].fill_null(0).sum()), 1),
             "playoff_weeks_total": round(float(playoff["expected_points"].sum()), 1)
             if playoff.height else None,
             "weeks": g.height,
@@ -256,6 +261,8 @@ def summary(snap: pl.DataFrame, keys: list[str], league: str | None) -> dict[str
             "by_week": [
                 {"week": int(r["target_week"]), "opponent": r["opponent"],
                  "expected_points": round(float(r["expected_points"]), 2),
+                 "proj_if_active": None if r.get("proj_if_active") is None
+                 else round(float(r["proj_if_active"]), 2),
                  "play_probability": round(float(r["play_probability"] or 0), 3),
                  "playoff": bool(r.get("playoff") or False)}
                 for r in g.iter_rows(named=True)

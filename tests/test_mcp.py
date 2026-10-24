@@ -92,10 +92,12 @@ def test_rest_of_season_from_a_snapshot(tools, warehouse, monkeypatch):  # noqa:
         "position": ["RB"] * 3, "team": ["DAL"] * 3, "target_week": [6, 7, 15],
         "opponent": ["GB", "PHI", "NYG"], "play_probability": [1.0, 0.9, 0.8],
         "expected_points": [12.0, 11.0, 10.0], "playoff": [False, False, True],
+        "proj_if_active": [12.0, 12.2, 12.5],
         "season": [2026] * 3, "week": [6] * 3,
     })  # fmt: skip
     store.write(rows, warehouse, ros.DATASET, volatile=True, ingested_at=datetime.now(UTC))
     d = call("rest_of_season", players=["Alpha Back", "Echo Williams"])  # Echo: on bye
     p = {x["name"]: x for x in d["players"]}["Alpha Back"]
     assert p["total"] == 33.0 and p["playoff_weeks_total"] == 10.0 and len(p["by_week"]) == 3
+    assert p["per_game_if_active"] == 12.2 and p["expected_games"] == 2.7
     assert d["not_found"] == ["00-E"]  # resolved despite the bye, but not in the run
