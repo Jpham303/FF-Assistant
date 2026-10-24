@@ -83,7 +83,10 @@ def client() -> httpx.Client:
     global _client
     if _client is None:
         _client = httpx.Client(
-            base_url=os.environ.get("FFA_API_URL", "http://localhost:8000"), timeout=60
+            # Under the 60 s a remote client waits, so a slow API answers with a reason
+            # instead of a silent timeout.
+            base_url=os.environ.get("FFA_API_URL", "http://localhost:8000"),
+            timeout=50,
         )
     return _client
 
@@ -101,6 +104,12 @@ class ApiError(Exception):
 def _call(method: str, path: str, **kw) -> Any:
     try:
         r = client().request(method, path, **kw)
+    except httpx.TimeoutException as e:
+        raise ApiError(
+            "The FF Assistant API took more than 50 seconds to answer. It is usually busy "
+            "(a projection job running in Dagster) or just restarted after a deploy. Try "
+            "again in a minute; if it keeps happening, check `docker stats`."
+        ) from e
     except httpx.HTTPError as e:
         raise ApiError(
             f"FF Assistant API unreachable at {client().base_url} ({e.__class__.__name__}). "

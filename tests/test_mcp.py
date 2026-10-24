@@ -101,3 +101,16 @@ def test_rest_of_season_from_a_snapshot(tools, warehouse, monkeypatch):  # noqa:
     assert p["total"] == 33.0 and p["playoff_weeks_total"] == 10.0 and len(p["by_week"]) == 3
     assert p["per_game_if_active"] == 12.2 and p["expected_games"] == 2.7
     assert d["not_found"] == ["00-E"]  # resolved despite the bye, but not in the run
+
+
+def test_slow_api_is_explained(monkeypatch):
+    import httpx
+
+    def slow(request):
+        raise httpx.ReadTimeout("slow", request=request)
+
+    mcp_server.set_client(httpx.Client(base_url="http://api", transport=httpx.MockTransport(slow)))
+    try:
+        assert "took more than 50 seconds" in call("current_week")["error"]
+    finally:
+        mcp_server.set_client(None)
