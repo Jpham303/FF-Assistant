@@ -345,6 +345,38 @@ def projections(
     return [Player(**startsit.as_dict(views[k]), rest_of_season=rest.get(k)) for k in ks]
 
 
+@app.get("/rest-of-season")
+def rest_of_season(
+    keys: str = Query(description="Comma-separated player keys"), league: str | None = None,
+    con=Depends(get_con), db=Depends(get_db),
+) -> dict:  # fmt: skip
+    """Rest-of-season expected points per player: total, playoff-week total and every
+    remaining week, from the latest daily rest-of-season run."""
+    season, w = _week(con, None)
+    row = _league(db, league)
+    ks = [k.strip() for k in keys.split(",") if k.strip()]
+    snap = ros.latest(con, season, w)
+    if snap.height == 0:
+        raise HTTPException(
+            503, "No rest-of-season projections yet: run ros_projections in Dagster "
+            "(it runs daily at 5:45 PM CT once availability_horizon has been fitted)",
+        )  # fmt: skip
+    rest = ros.summary(snap, ks, row.id if row is not None else None)
+    first = next(iter(rest.values()), {})
+    return {
+        "season": season, "from_week": w, "as_of": first.get("as_of"),
+        "scoring": (row.name if row is not None and first.get("scoring") == row.id
+                    else "standard half-PPR"),
+        "method": "Every remaining week simulated with this week's model: future lines from "
+        "team ratings fitted on this season's betting lines; chance to play from where each "
+        "player stands today (healthy, injured, IR) and how often players in that spot "
+        "played later games. Backtested on 2025: beat season-average and last-4 pace at "
+        "every position.",
+        "players": [rest[k] for k in ks if k in rest],
+        "not_found": [k for k in ks if k not in rest],
+    }  # fmt: skip
+
+
 @app.post("/start-sit", response_model=StartSitResponse)
 def start_sit(req: StartSitRequest, con=Depends(get_con), db=Depends(get_db)) -> StartSitResponse:
     season, w = _week(con, req.week)

@@ -243,7 +243,10 @@ def summary(snap: pl.DataFrame, keys: list[str], league: str | None) -> dict[str
     out = {}
     for (key,), g in s.group_by("key"):
         playoff = g.filter(pl.col("playoff")) if "playoff" in g.columns else g.head(0)
+        first = g.row(0, named=True)
         out[key] = {
+            "key": key, "name": first.get("name"), "position": first.get("position"),
+            "team": first.get("team"),
             "total": round(float(g["expected_points"].sum()), 1),
             "playoff_weeks_total": round(float(playoff["expected_points"].sum()), 1)
             if playoff.height else None,

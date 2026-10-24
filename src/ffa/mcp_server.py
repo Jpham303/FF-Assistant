@@ -62,6 +62,9 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    bye: they may come back later in the season.
 8. If a player is not found or not playing this week, say so. Never substitute a
    similarly named player.
+9. Rest of season, the remaining schedule, playoff weeks, "how will X do the rest of the
+   year", dynasty-free trade value: call rest_of_season. Never answer these from web
+   search or memory; if the tool returns an error, relay it instead of guessing.
 """
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
@@ -109,7 +112,8 @@ def _call(method: str, path: str, **kw) -> Any:
     return r.json()
 
 
-def _resolve(players: list[str], week: int | None) -> tuple[list[str], list[dict]]:
+def _resolve(players: list[str], week: int | None,
+             need_projection: bool = True) -> tuple[list[str], list[dict]]:  # fmt: skip
     """Names or keys -> keys. Accepts a name only on an exact match that is playing this
     week; everything else comes back as a problem for the assistant to relay or clarify."""
     keys, problems = [], []
@@ -120,7 +124,7 @@ def _resolve(players: list[str], week: int | None) -> tuple[list[str], list[dict
         params = {"q": p, "limit": 5} | ({"week": week} if week else {})
         found = _call("GET", "/players/search", params=params)
         exact = [r for r in found if r["match"] == 1.0]
-        if len(exact) == 1 and exact[0]["projected"]:
+        if len(exact) == 1 and (exact[0]["projected"] or not need_projection):
             keys.append(exact[0]["key"])
         elif len(exact) == 1:
             r = exact[0]
@@ -209,6 +213,24 @@ def player_projections(players: list[str], league: str | None = None,
             return {"unresolved": problems, "resolved_keys": keys}
         params = {"keys": ",".join(keys)} | ({"league": league} if league else {})
         return _call("GET", "/projections", params=params | ({"week": week} if week else {}))
+    except ApiError as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(annotations=READ_ONLY)
+def rest_of_season(players: list[str], league: str | None = None) -> dict:
+    """Rest-of-season outlook for one or more players: projected fantasy points for every
+    remaining week through the fantasy championship (opponent, expected points, chance to
+    play), the rest-of-season total and the playoff-week total, in the league's scoring.
+    Use for "rest of season", "ROS", "remaining schedule", "playoff schedule", "who will
+    score more the rest of the way", and as the basis for trade questions.
+    players: names or keys; league: id from list_leagues (defaults to the user's league)."""
+    try:
+        keys, problems = _resolve(players, None, need_projection=False)  # byes are fine
+        if problems:
+            return {"unresolved": problems, "resolved_keys": keys}
+        params = {"keys": ",".join(keys)} | ({"league": league} if league else {})
+        return _call("GET", "/rest-of-season", params=params)
     except ApiError as e:
         return {"error": str(e)}
 

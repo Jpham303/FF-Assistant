@@ -31,7 +31,7 @@ def test_tools_listed_read_only():
     tools = anyio.run(mcp_server.mcp.list_tools)
     names = {t.name for t in tools}
     assert names == {"current_week", "search_players", "start_sit", "player_projections",
-                     "list_leagues", "my_team"}  # fmt: skip
+                     "list_leagues", "my_team", "rest_of_season"}  # fmt: skip
     assert all(t.annotations and t.annotations.read_only_hint for t in tools)
     assert "SMALL factor" in mcp_server.INSTRUCTIONS
 
@@ -72,3 +72,30 @@ def test_api_down_is_explained():
         assert "unreachable" in call("current_week")["error"]
     finally:
         mcp_server.set_client(None)
+
+
+def test_rest_of_season_explains_a_missing_run(tools):
+    d = call("rest_of_season", players=["Alpha Back"])
+    assert "No rest-of-season projections yet" in d["error"]
+
+
+def test_rest_of_season_from_a_snapshot(tools, warehouse, monkeypatch):  # noqa: F811
+    from datetime import UTC, datetime
+
+    import polars as pl
+
+    from ffa.service import ros
+    from ffa.warehouse import store
+
+    rows = pl.DataFrame({
+        "league": ["default"] * 3, "key": ["00-A"] * 3, "name": ["Alpha Back"] * 3,
+        "position": ["RB"] * 3, "team": ["DAL"] * 3, "target_week": [6, 7, 15],
+        "opponent": ["GB", "PHI", "NYG"], "play_probability": [1.0, 0.9, 0.8],
+        "expected_points": [12.0, 11.0, 10.0], "playoff": [False, False, True],
+        "season": [2026] * 3, "week": [6] * 3,
+    })  # fmt: skip
+    store.write(rows, warehouse, ros.DATASET, volatile=True, ingested_at=datetime.now(UTC))
+    d = call("rest_of_season", players=["Alpha Back", "Echo Williams"])  # Echo: on bye
+    p = {x["name"]: x for x in d["players"]}["Alpha Back"]
+    assert p["total"] == 33.0 and p["playoff_weeks_total"] == 10.0 and len(p["by_week"]) == 3
+    assert d["not_found"] == ["00-E"]  # resolved despite the bye, but not in the run
