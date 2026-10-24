@@ -206,6 +206,22 @@ format change, regenerate stored weeks: `uv run ffa rebuild-projections --dry-ru
 them, without `--dry-run` rebuilds them (projection_history, the record of what was
 projected at the time, is left as it was).
 
+## Where the data lives
+
+The warehouse and models are in a Docker volume (`ff-assistant_ffa-data`), not the
+`data/` folder: Docker Desktop reads files on a Windows drive slowly (about 24 ms a file),
+and with thousands of snapshot files every job slowed to a crawl. `data/reports/` is
+still shared with Windows. Moving an existing install, once, after `git pull`:
+
+```
+.\scripts\move-data-to-volume.ps1
+```
+
+It copies `data/` into the volume (the folder stays as a backup) and restarts the stack.
+Run CLI commands inside the stack: `.\scripts\ffa.ps1 report`. To undo, revert the
+`volumes:` lines in docker-compose.yml and `docker compose up -d` (the stack then reads
+`data/` again, as it was before the move).
+
 ## Run limits
 
 Set in `dagster.yaml` and on each job, so a hung run can't block the schedule:

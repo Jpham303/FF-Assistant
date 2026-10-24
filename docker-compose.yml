@@ -7,7 +7,12 @@ x-app: &app
     args:
       GIT_SHA: ${FFA_GIT_SHA:-unknown}  # set FFA_GIT_SHA before building to record it
   env_file: .env
-  volumes: [./data:/data]
+  # Data lives in a Docker volume (Linux storage): reading thousands of Parquet files
+  # from a Windows-drive bind mount took ~90 s per warehouse open (Oct 24). Reports stay
+  # on the host so they open in Windows. One-time move: scripts/move-data-to-volume.ps1.
+  volumes:
+    - ffa-data:/data
+    - ./data/reports:/data/reports
   depends_on:
     migrate: { condition: service_completed_successfully }
 
@@ -47,3 +52,4 @@ services:
 
 volumes:
   pgdata:
+  ffa-data:

@@ -63,12 +63,44 @@ def test_folders_without_parquet_are_ignored(tmp_path):
 
 
 def test_connect_only_requested_datasets(tmp_path):
+    import duckdb
     import polars as pl
+    import pytest
 
     from ffa.warehouse import duck, store
 
     df = pl.DataFrame({"season": [2026], "week": [1], "x": [1]})
     store.write(df, tmp_path, "a")
     store.write(df, tmp_path, "b")
-    names = {r[0] for r in duck.connect(tmp_path, datasets=["a"]).sql("show tables").fetchall()}
-    assert "a" in names and "b" not in names
+    con = duck.connect(tmp_path, datasets=["a"])
+    assert con.sql("show tables").fetchall() == []  # nothing opened until used
+    assert con.sql("select x from a").fetchall() == [(1,)]
+    with pytest.raises(duckdb.CatalogException):
+        con.sql("select * from b")
+
+
+def test_lazy_views_latest_snapshot_history_and_quoted_paths(tmp_path):
+    from datetime import UTC, datetime
+
+    import polars as pl
+
+    from ffa.warehouse import duck, store
+
+    for hour, x in ((1, 10), (2, 20), (3, 30)):
+        week7 = pl.DataFrame({"season": [2026], "week": [7], "x": [x]})
+        store.write(week7, tmp_path, "snapds", volatile=True,
+                    ingested_at=datetime(2026, 10, 24, hour, tzinfo=UTC))  # fmt: skip
+    store.write(pl.DataFrame({"season": [2026], "week": [6], "x": [5]}), tmp_path, "snapds",
+                volatile=True, ingested_at=datetime(2026, 10, 17, tzinfo=UTC))  # fmt: skip
+    con = duck.connect(tmp_path)
+    assert sorted(con.sql("select week, x from snapds").fetchall()) == [(6, 5), (7, 30)]
+    assert con.sql("select count(*) from snapds_history").fetchall() == [(4,)]
+    t = duck.week(con, "snapds", 2026, 7)  # a path in quotes names no view
+    con.sql(f"select * from {t}").fetchall()
+    cutoff = datetime(2026, 10, 24, 2, 30, tzinfo=UTC)
+    assert duck.as_of(con, "snapds", cutoff).pl().sort("week")["x"].to_list() == [5, 20]
+    store.write(pl.DataFrame({"season": [2026], "week": [8], "y": [1]}), tmp_path, "plain")
+    con2 = duck.connect(tmp_path)
+    con2.sql("select * from plain").fetchall()
+    store.write(pl.DataFrame({"season": [2026], "week": [9], "y": [2]}), tmp_path, "plain")
+    assert con2.sql("select count(*) from plain").fetchall() == [(2,)]  # new weeks picked up
