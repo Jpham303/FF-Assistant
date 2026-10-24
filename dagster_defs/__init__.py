@@ -3,6 +3,10 @@
 No `from __future__ import annotations` here: Dagster inspects the real type of `context`.
 """
 
+import faulthandler
+import functools
+import sys
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -79,6 +83,40 @@ def _make_asset(dataset: str):
 
 
 ingest_assets = [_make_asset(name) for name in nflverse.DATASETS]
+
+# Run limits (see dagster.yaml): heavy jobs run one at a time; every job has a time
+# limit so a hung run is ended rather than holding a slot.
+HEAVY = {"ffa/heavy": "true"}
+
+
+def _limit(minutes: int) -> dict[str, str]:
+    return {"dagster/max_runtime": str(minutes * 60)}
+
+
+HANG_DUMP_SECONDS = 15 * 60
+
+
+@contextmanager
+def _hang_dump(seconds: int = HANG_DUMP_SECONDS):
+    """If the step is still running after `seconds`, write every thread's stack to stderr
+    (the run's stderr tab) so a hang shows where it is stuck. Cancelled when done."""
+    faulthandler.dump_traceback_later(seconds, repeat=False, file=sys.stderr)
+    try:
+        yield
+    finally:
+        faulthandler.cancel_dump_traceback_later()
+
+
+def dumps_on_hang(fn):
+    """Decorator form of _hang_dump for an asset function."""
+
+    @functools.wraps(fn)
+    def wrapper(context: AssetExecutionContext):
+        with _hang_dump():
+            return fn(context)
+
+    return wrapper
+
 
 nflverse_job = define_asset_job(
     "nflverse_ingest",
@@ -161,7 +199,9 @@ def sleeper_players(context: AssetExecutionContext) -> MaterializeResult:
 
 
 status_job = define_asset_job(
-    "status_refresh", selection=AssetSelection.assets("sleeper_players", "weekly_projections")
+    "status_refresh",
+    selection=AssetSelection.assets("sleeper_players", "weekly_projections"),
+    tags=HEAVY | _limit(20),
 )
 
 
@@ -506,6 +546,7 @@ def _league_settings(log) -> dict[str, dict]:
 
 
 @asset(group_name="projections", deps=["weekly_projections", "availability_horizon"])
+@dumps_on_hang
 def ros_projections(context: AssetExecutionContext) -> MaterializeResult:
     """Rest-of-season projections: every remaining week through each league's fantasy
     championship, scored in each league's rules, frozen as a dated snapshot. Future lines
@@ -543,13 +584,13 @@ def ros_projections(context: AssetExecutionContext) -> MaterializeResult:
     })  # fmt: skip
 
 
-ros_job = define_asset_job("ros_refresh", selection=AssetSelection.assets("ros_projections"))
+ros_job = define_asset_job("ros_refresh", selection=AssetSelection.assets("ros_projections"),
+                           tags=HEAVY | _limit(45))  # fmt: skip
 
 
-# Daily, after the status fetch has refreshed this week's projections (Sunday: after the
-# morning status run).
-@schedule(job=ros_job, cron_schedule=["45 17 * * 1-6", "15 11 * * 0"],
-          execution_timezone="America/Chicago",
+# Monday-Saturday, after the status fetch has refreshed this week's projections.
+# Not Sunday: on a slow machine it can run 15+ minutes, inside the early-game window.
+@schedule(job=ros_job, cron_schedule="45 17 * * 1-6", execution_timezone="America/Chicago",
           default_status=DefaultScheduleStatus.RUNNING)  # fmt: skip
 def daily_ros(context: ScheduleEvaluationContext):
     return RunRequest(run_key=f"ros-{context.scheduled_execution_time}")
@@ -560,6 +601,7 @@ def daily_ros(context: ScheduleEvaluationContext):
     deps=["sim_params", "matchup_model", "team_games", "player_games", "injuries", "rosters",
           "schedules"],
 )  # fmt: skip
+@dumps_on_hang
 def weekly_projections(context: AssetExecutionContext) -> MaterializeResult:
     """Simulate the upcoming week with the latest injury report, for the API to serve."""
     con = duck.connect(settings.warehouse_dir)
@@ -611,7 +653,9 @@ def _league_scoring(log) -> dict[str, dict]:
 
 
 projections_job = define_asset_job(
-    "projections_refresh", selection=AssetSelection.assets("weekly_projections")
+    "projections_refresh",
+    selection=AssetSelection.assets("weekly_projections"),
+    tags=HEAVY | _limit(20),
 )
 
 
@@ -668,7 +712,8 @@ def sleeper_benchmark(context: AssetExecutionContext) -> MaterializeResult:
 
 prekick_job = define_asset_job(
     "pre_kickoff_refresh", selection=AssetSelection.assets("weekly_projections",
-                                                           "sleeper_benchmark")
+                                                           "sleeper_benchmark"),
+    tags={"dagster/priority": "10"} | _limit(20),  # not heavy: never waits on one
 )  # fmt: skip
 
 
@@ -734,7 +779,9 @@ def eval_results(context: AssetExecutionContext) -> MaterializeResult:
 
 
 tracking_job = define_asset_job(
-    "tracking_refresh", selection=AssetSelection.assets("actuals", "eval_results")
+    "tracking_refresh",
+    selection=AssetSelection.assets("actuals", "eval_results"),
+    tags=_limit(30),
 )
 
 

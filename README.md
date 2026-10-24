@@ -206,6 +206,20 @@ format change, regenerate stored weeks: `uv run ffa rebuild-projections --dry-ru
 them, without `--dry-run` rebuilds them (projection_history, the record of what was
 projected at the time, is left as it was).
 
+## Run limits
+
+Set in `dagster.yaml` and on each job, so a hung run can't block the schedule:
+
+- **Time limits:** the daemon ends a run past its limit: hourly projections and the
+  status refresh 20 minutes, pre-kickoff 20, tracking 30, rest of season 45, anything
+  else 60. The next scheduled run starts fresh.
+- **One heavy job at a time:** projections, the status refresh and rest of season queue
+  behind each other (`ffa/heavy`). Pre-kickoff runs aren't heavy, so they never wait on
+  one, and they go first in the queue. Up to 3 runs at once.
+- **Stacks on a hang:** if `weekly_projections` or `ros_projections` is still running
+  after 15 minutes, every thread's stack is written to the run's stderr tab, showing
+  where it's stuck.
+
 ## Rest of season
 
 `ros_projections` (daily at 5:45 PM CT, Sunday at 11:15 AM) projects every remaining week

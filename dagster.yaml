@@ -11,6 +11,19 @@ storage:
         env: POSTGRES_DB
       port: 5432
 
-# At most two runs at once, so a backfill can't exhaust Docker's memory.
+# At most three runs at once, so a backfill can't exhaust Docker's memory, and only one
+# heavy job (projections, rest of season) at a time so the API keeps headroom. Pre-kickoff
+# runs aren't tagged heavy: a long job never delays a snapshot, and they jump the queue.
 run_queue:
-  max_concurrent_runs: 2
+  max_concurrent_runs: 3
+  tag_concurrency_limits:
+    - key: "ffa/heavy"
+      limit: 1
+
+# Run monitoring: the daemon ends a run that exceeds its time limit (tag dagster/max_runtime
+# on each job; this is the default for the rest), so a hung run can't hold a slot for hours.
+run_monitoring:
+  enabled: true
+  start_timeout_seconds: 300
+  poll_interval_seconds: 60
+  max_runtime_seconds: 3600
