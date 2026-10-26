@@ -173,22 +173,23 @@ Fantasy-relevant players (top 12 QB/TE, top 36 RB/WR by points per game at the c
 
 | Pos | Model MAE | Edge vs season-avg pace | Edge vs last-4 pace | Rank corr. model / season-avg / last-4 |
 | --- | --- | --- | --- | --- |
-| QB | 40.7 | +15.7 [+1.6, +31.6] | +18.6 [+2.5, +34.4] | 0.22 / 0.20 / 0.30 |
-| RB | 31.8 | +7.5 [+2.1, +12.7] | +10.3 [+4.9, +15.8] | 0.69 / 0.53 / 0.50 |
-| WR | 29.0 | +18.0 [+11.7, +24.3] | +19.3 [+12.9, +25.9] | 0.51 / 0.19 / 0.28 |
-| TE | 20.5 | +18.8 [+7.4, +30.5] | +23.3 [+12.5, +34.1] | 0.53 / −0.06 / −0.03 |
+| QB | 40.3 | +17.3 [+4.4, +31.4] | +19.2 [+5.1, +34.0] | 0.23 / 0.20 / 0.38 |
+| RB | 30.9 | +7.7 [+2.3, +12.7] | +10.4 [+4.5, +16.2] | 0.76 / 0.57 / 0.55 |
+| WR | 29.5 | +17.9 [+11.3, +24.6] | +18.7 [+12.2, +25.1] | 0.54 / 0.32 / 0.37 |
+| TE | 21.1 | +18.3 [+6.9, +30.1] | +21.8 [+10.4, +33.3] | 0.61 / 0.00 / −0.01 |
 
 All players with 2+ games: the model wins at every position in 2025, by 4.8 to 14.5
-points, every interval above zero. **Gate passed:** the trade engine was cleared to
+points, every interval above zero (re-run after the bye-week fix below: 4.0 to 11.1). **Gate passed:** the trade engine was cleared to
 build on these projections only if they beat season-average pace on the 2025 holdout.
 
 Not met, or not clean:
 
-- 2025 top-12 QB ranking: last-4 pace ranked them better (0.30 vs 0.22; 36 player-cutoffs,
+- 2025 top-12 QB ranking: last-4 pace ranked them better (0.38 vs 0.23; 36 player-cutoffs,
   noisy). The proposed criterion "higher rank correlation than both paces" fails in this cell.
 - 2024 (tuning season) top-12 QBs: the model's error was 8.6 points larger than
   season-average pace (interval −23.1 to +5.4), with a −32 point bias. Those QBs averaged
-  about 21 points a game when they played, against 18 projected.
+  about 21 points a game when they played, against 18 projected. After the bye-week fix:
+  9.1 points larger, −33 bias.
 
 Bugs found and fixed during the backtest and the first live run:
 
@@ -204,6 +205,13 @@ Bugs found and fixed during the backtest and the first live run:
   to explain it. Estimates are now made once, as of the current week, and held flat, as
   the spec says. The table above is from the fixed code (margins within 0.5 points of
   the earlier run; top-36 RB bias −4.4 → −2.8 in 2024).
+- Teams on bye at the cutoff week were missing entirely (found live, Oct 26: a trade was
+  valued against a player with no projection). nflverse's weekly rosters leave out teams
+  on bye, and the roster step used only the file's latest week. Each team now uses its own
+  latest roster week. The 8 and 12 cutoffs gained 10-15% more players; the table above is
+  the re-run. The gate still passes: the model beats both paces at every position in 2025.
+  The trade engine also now refuses to value a player with no projection instead of
+  counting him as 0.
 
 ## Known limitations (for Phase 3)
 
