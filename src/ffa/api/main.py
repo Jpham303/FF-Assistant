@@ -398,6 +398,40 @@ def trade_evaluate(req: TradeRequest, con=Depends(get_con), db=Depends(get_db)) 
     return out | {"league": row.name, "season": season, "from_week": w}
 
 
+class TargetsRequest(BaseModel):
+    give: list[str] = Field(default_factory=list, max_length=4,
+                            description="Players you're offering (keys); empty = any")  # fmt: skip
+    position: str | None = Field(None, description="Only targets at this position (QB, RB...)")
+    partner: str | None = Field(None, description="Only this team (name)")
+    league: str | None = None
+    playoff_weighting: bool = False
+
+
+@app.post("/trade/targets")
+def trade_targets(req: TargetsRequest, con=Depends(get_con), db=Depends(get_db)) -> dict:
+    """Target search: the best trades that raise your lineup without hurting the other
+    team's much (up to 5, at most one per team unless a partner is named), each scored
+    like /trade/evaluate, plus your needs by position."""
+    if db is None:
+        raise HTTPException(503, "App database not configured")
+    row = _league(db, req.league)
+    if row is None:
+        raise HTTPException(404, "No league: pass league (see /leagues)")
+    season, w = _week(con, None)
+    rules, _label = _rules(row)
+    from ffa.trade import service as trade_service
+
+    try:
+        out = trade_service.trade_targets(con, db, row, rules, season, w, req.give,
+                                          req.position, req.partner,
+                                          req.playoff_weighting)  # fmt: skip
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    except LookupError as e:
+        raise HTTPException(503, str(e)) from e
+    return out | {"league": row.name, "season": season, "from_week": w}
+
+
 @app.get("/rest-of-season")
 def rest_of_season(
     keys: str = Query(description="Comma-separated player keys"), league: str | None = None,

@@ -107,3 +107,49 @@ def test_playoff_odds_follow_strength_and_standings():
     assert sum(o.values()) == pytest.approx(2.0, abs=0.01)  # two spots, every season
     stronger = dict(weekly, d={w: (130, 100.0) for w in (8, 9, 10)})
     assert playoffs.odds(records, stronger, sched, 2, n=4000)["d"] > o["d"]
+
+
+# ---------------------------------------------------------------- target search
+
+from ffa.trade import search  # noqa: E402
+
+
+def test_needs_are_points_a_week_against_the_middle_team():
+    lg = _league()
+    n = search.needs(lg)
+    # RB starters: you RB1+RB2 (+RB3 never: WR2 takes flex) = 25 a week; them RB4 = 8.
+    # Two teams: the "middle" is the higher one (index 1 of 2), so you're at 0, they trail 17.
+    assert n["me"]["RB"] == 0.0 and n["them"]["RB"] == 17.0
+    assert n["me"]["WR"] > 0  # their WRs are better
+
+
+def test_search_finds_the_hand_checked_swap_and_scores_like_evaluate():
+    lg = _league()
+    found = search.search(lg, "me")
+    assert found, "the RB3-for-WR4 swap (+5 / +3 a week) should be found"
+    n = len(WEEKS)
+    for p in found:
+        assert p.mine >= search.MY_MIN_GAIN * n and p.theirs >= -search.THEIR_MAX_LOSS * n
+        r = core.evaluate(lg, "me", p.partner, list(p.give), list(p.get))
+        assert r["you"]["ros_change"] == round(p.mine, 1)
+        assert r["them"]["ros_change"] == round(p.theirs, 1)
+    assert found[0].mine >= 15.0  # at least as good as RB3 for WR4
+
+
+def test_search_respects_a_named_offer_and_a_position():
+    lg = _league()
+    for p in search.search(lg, "me", give=["RB3"]):
+        assert p.give == ("RB3",)
+    for p in search.search(lg, "me", position="WR"):
+        assert all(lg.players[k].position == "WR" for k in p.get)
+    assert search.search(lg, "me", position="TE") == []  # nobody has one
+    with pytest.raises(ValueError, match="Not on your roster"):
+        search.search(lg, "me", give=["WR3"])
+
+
+def test_search_never_returns_a_trade_that_guts_them():
+    lg = _league()
+    # Their QB2 would start for nobody on your side (QB1 is better), and taking WR3+WR4
+    # for scraps costs them far more than THEIR_MAX_LOSS a week: never suggested.
+    for p in search.search(lg, "me"):
+        assert not {"WR3", "WR4"} <= set(p.get) or p.theirs >= -search.THEIR_MAX_LOSS * len(WEEKS)

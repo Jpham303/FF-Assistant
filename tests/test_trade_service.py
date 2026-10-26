@@ -100,3 +100,31 @@ def test_trade_with_an_unprojected_player_is_refused_not_valued_at_zero(trade_le
     with pytest.raises(LookupError, match="Wash Ington"):
         service.evaluate_trade(con, db_, row, from_sleeper(row.scoring), SEASON, WEEK,
                                give=["00-A"], get=["00-W"], fetch=_schedule)  # fmt: skip
+
+
+def test_trade_targets_service_api_and_tool(trade_league, client):  # noqa: F811
+    from ffa import mcp_server
+
+    db_, row, wh = trade_league
+    con = duck.connect(wh)
+    r = service.trade_targets(con, db_, row, from_sleeper(row.scoring), SEASON, WEEK,
+                              fetch=_schedule)  # fmt: skip
+    assert "QB" in r["your_needs"] and r["searched"]["partner"] == "every team"
+    for p in r["packages"]:  # each one scored like evaluate_trade
+        assert p["you"]["ros_change"] > 0 and "verdict" in p and p["shape"]
+    api = client.post("/trade/targets", json={"league": "sleeper:1", "position": "QB"})
+    assert api.status_code == 200, api.text
+    pk = api.json()["packages"]
+    # Alpha (RB, 14) for Quinn (QB, 18) costs them 4 a week: past THEIR_MAX_LOSS, so no
+    # QB package is realistic in this two-team league.
+    assert all(p["get"] == ["00-Q"] for p in pk) and len(pk) <= 1
+    bad = client.post("/trade/targets", json={"league": "sleeper:1", "partner": "Nobody"})
+    assert bad.status_code == 422 and "Theirs" in bad.text
+    mcp_server.set_client(client)
+    try:
+        from tests.test_mcp import call
+
+        t = call("trade_targets", position="QB", league="sleeper:1")
+        assert "packages" in t and "your_needs" in t
+    finally:
+        mcp_server.set_client(None)

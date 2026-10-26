@@ -78,7 +78,13 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    realistic for them?), playoff odds before/after, any free agent added (by name, with
    his points) or player dropped, and the flags in how_it_looks. p_ahead is approximate
    (players treated as independent); say so if it's near 50%.
-12. A player in rest_of_season's not_found has NO projection: say it's missing (a data
+12. "Who should I target", "I need a RB, what's realistic", "what can I get for X":
+   call trade_targets (never web search). Start with the user's biggest needs, then each
+   package: what he gives and gets, his gain per week and theirs (the other side must not
+   lose much, or it won't be accepted), the shape (straight swap, sweetener,
+   consolidation), playoff odds change, and any free-agent add. It only suggests:
+   sending an offer is up to the user, in Sleeper.
+13. A player in rest_of_season's not_found has NO projection: say it's missing (a data
    problem to report), never treat him as worth 0 points or compare anyone against him.
 """
 
@@ -278,6 +284,29 @@ def evaluate_trade(give: list[str], get: list[str], league: str | None = None,
             return {"unresolved": p1 + p2}
         body = {"give": keys_give, "get": keys_get, "playoff_weighting": playoff_weighting}
         return _call("POST", "/trade/evaluate", json=body | ({"league": league} if league else {}))
+    except ApiError as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(annotations=READ_ONLY)
+def trade_targets(give: list[str] | None = None, position: str | None = None,
+                  partner: str | None = None, league: str | None = None,
+                  playoff_weighting: bool = False) -> dict:  # fmt: skip
+    """Who should I target in a trade? Searches every other roster in the user's league
+    for trades that raise the user's weekly lineup and don't hurt the other team's much,
+    and returns up to 5 (one per team unless partner is set), each fully scored like
+    evaluate_trade, plus the user's needs by position. give: players the user is offering
+    (names; empty = any); position: only targets at this position ("I need a RB");
+    partner: only this team. Takes up to ~30 s. Read-only: never proposes anything."""
+    try:
+        keys_give, p1 = _resolve(give or [], None, need_projection=False)
+        if p1:
+            return {"unresolved": p1}
+        body = {"give": keys_give, "position": position, "partner": partner,
+                "playoff_weighting": playoff_weighting}  # fmt: skip
+        if league:
+            body["league"] = league
+        return _call("POST", "/trade/targets", json=body)
     except ApiError as e:
         return {"error": str(e)}
 

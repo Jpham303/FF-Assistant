@@ -31,7 +31,8 @@ def test_tools_listed_read_only():
     tools = anyio.run(mcp_server.mcp.list_tools)
     names = {t.name for t in tools}
     assert names == {"current_week", "search_players", "start_sit", "player_projections",
-                     "list_leagues", "my_team", "rest_of_season", "evaluate_trade"}  # fmt: skip
+                     "list_leagues", "my_team", "rest_of_season", "evaluate_trade",
+                     "trade_targets"}  # fmt: skip
     assert all(t.annotations and t.annotations.read_only_hint for t in tools)
     assert "SMALL factor" in mcp_server.INSTRUCTIONS
 
