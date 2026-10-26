@@ -233,9 +233,13 @@ Set in `dagster.yaml` and on each job, so a hung run can't block the schedule:
 - **One heavy job at a time:** projections, the status refresh and rest of season queue
   behind each other (`ffa/heavy`). Pre-kickoff runs aren't heavy, so they never wait on
   one, and they go first in the queue. Up to 3 runs at once.
-- **Stacks on a hang:** if `weekly_projections` or `ros_projections` is still running
-  after 15 minutes, every thread's stack is written to the run's stderr tab, showing
-  where it's stuck.
+- **Progress and stacks:** `ros_projections` logs one line per projected week in its
+  event log. If `weekly_projections` or `ros_projections` is still running after 10
+  minutes (and every 10 after), every thread's stack goes to the event log (kept in
+  Postgres, so it survives a container restart) and the stderr tab.
+- **Thread caps** (`docker-compose.yml`): Polars 4 threads, linear algebra 1. Uncapped on
+  a 32-thread machine, rest of season took 72 s a week instead of 8. To time it yourself:
+  `docker compose exec dagster-daemon python -m ffa.ros_timing`.
 
 ## Rest of season
 

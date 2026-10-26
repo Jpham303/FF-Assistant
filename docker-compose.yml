@@ -7,6 +7,14 @@ x-app: &app
     args:
       GIT_SHA: ${FFA_GIT_SHA:-unknown}  # set FFA_GIT_SHA before building to record it
   env_file: .env
+  # Thread caps: uncapped, Polars and the linear-algebra libraries each start a thread per
+  # core (32 here) inside the simulation loops and fight over the CPUs. Measured Oct 26:
+  # rest-of-season 72 s a week uncapped, 8 s capped.
+  environment:
+    POLARS_MAX_THREADS: "4"
+    OMP_NUM_THREADS: "1"
+    OPENBLAS_NUM_THREADS: "1"
+    MKL_NUM_THREADS: "1"
   # Data lives in a Docker volume (Linux storage): reading thousands of Parquet files
   # from a Windows-drive bind mount took ~90 s per warehouse open (Oct 24). Reports stay
   # on the host so they open in Windows. One-time move: scripts/move-data-to-volume.ps1.
