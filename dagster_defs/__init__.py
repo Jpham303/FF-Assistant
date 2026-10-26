@@ -6,6 +6,9 @@ No `from __future__ import annotations` here: Dagster inspects the real type of 
 import faulthandler
 import functools
 import sys
+import threading
+import time
+import traceback
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -93,17 +96,44 @@ def _limit(minutes: int) -> dict[str, str]:
     return {"dagster/max_runtime": str(minutes * 60)}
 
 
-HANG_DUMP_SECONDS = 15 * 60
+HANG_DUMP_SECONDS = 10 * 60
+
+
+def stack_report() -> str:
+    """Every thread's current stack, innermost call last."""
+    names = {t.ident: t.name for t in threading.enumerate()}
+    me = threading.get_ident()
+    parts = []
+    for tid, frame in sys._current_frames().items():
+        if tid == me:
+            continue
+        stack = "".join(traceback.format_stack(frame)[-12:])
+        parts.append(f"Thread {names.get(tid, tid)}:\n{stack}")
+    return "\n".join(parts)
 
 
 @contextmanager
-def _hang_dump(seconds: int = HANG_DUMP_SECONDS):
-    """If the step is still running after `seconds`, write every thread's stack to stderr
-    (the run's stderr tab) so a hang shows where it is stuck. Cancelled when done."""
-    faulthandler.dump_traceback_later(seconds, repeat=False, file=sys.stderr)
+def _hang_dump(seconds: int = HANG_DUMP_SECONDS, log=None):
+    """If the step is still running after `seconds` (and every `seconds` after that), write
+    every thread's stack to the run's event log (`log`, stored in Postgres, so it survives
+    container restarts) and to stderr, so a slow or stuck step shows where it is."""
+    faulthandler.dump_traceback_later(seconds, repeat=True, file=sys.stderr)
+    stop = threading.Event()
+    start = time.monotonic()
+
+    def watch():
+        while not stop.wait(seconds):
+            if log is not None:
+                mins = (time.monotonic() - start) / 60
+                log.warning(f"Still running after {mins:.0f} min. Where each thread is:\n"
+                            + stack_report())  # fmt: skip
+
+    t = threading.Thread(target=watch, name="hang-watch", daemon=True)
+    t.start()
     try:
         yield
     finally:
+        stop.set()
         faulthandler.cancel_dump_traceback_later()
 
 
@@ -112,7 +142,7 @@ def dumps_on_hang(fn):
 
     @functools.wraps(fn)
     def wrapper(context: AssetExecutionContext):
-        with _hang_dump():
+        with _hang_dump(log=context.log):
             return fn(context)
 
     return wrapper
@@ -574,7 +604,8 @@ def ros_projections(context: AssetExecutionContext) -> MaterializeResult:
         projections_mod.latest_sleeper_status(con, season, week)[0],
     )  # fmt: skip
     df = ros_mod.project(frames, projections_mod.load_models(settings.models_dir), table,
-                         season, week, max(last.values()), scoring)  # fmt: skip
+                         season, week, max(last.values()), scoring,
+                         progress=context.log.info)  # fmt: skip
     df = ros_mod.trim_to_leagues(df, last, league_set)
     store.write(df.with_columns(pl.col("as_of_week").alias("week")), settings.warehouse_dir,
                 ros_mod.DATASET, volatile=True)  # fmt: skip

@@ -17,6 +17,8 @@ with expected points, points if he plays, chance to play and the spread of outco
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import polars as pl
@@ -130,17 +132,23 @@ def _summaries(lines: pl.DataFrame, leagues: dict[str, dict], week: int) -> pl.D
 
 def project(frames: Frames, models: Models, table: dict[str, float], season: int, week: int,
             last_week: int, leagues: dict[str, dict], *, n: int = N_FUTURE,
-            mask_future_lines: bool = False, seed: int = 0) -> pl.DataFrame:  # fmt: skip
+            mask_future_lines: bool = False, seed: int = 0,
+            progress: Callable[[str], None] | None = None) -> pl.DataFrame:  # fmt: skip
     """Rest-of-season rows: league, key, name, position, team, target_week, opponent,
     play_probability, expected_points, proj_if_active, sd, p10/p90_if_active,
-    lines_from_ratings."""
+    lines_from_ratings. `progress`: called with one line per projected week (time,
+    players), so a long run shows where it is."""
+    say = progress or (lambda _msg: None)
+    t0 = time.monotonic()
     f = as_of(frames, season, week, mask_future_lines=mask_future_lines)
     r = ratings.fit(f.team_games, season, week)
     tg = ratings.fill_lines(f.team_games, r, season, week)
     st = standing(f, season, week)
     kidx = team_game_index(tg, season, week)
+    say(f"Setup (data cut, team ratings, standing): {time.monotonic() - t0:.0f} s")
     out = []
     for w in range(week, last_week + 1):
+        tw = time.monotonic()
         current = w == week
         inp = build(
             season=season, week=w, models=models, team_games=tg, player_games=f.player_games,
@@ -181,6 +189,10 @@ def project(frames: Frames, models: Models, table: dict[str, float], season: int
                           .select(meta.columns)], how="vertical_relaxed")  # fmt: skip
         out.append(
             s.join(meta.unique("key"), on="key", how="left").join(filled, on="team", how="left")
+        )
+        say(
+            f"Week {w} of {last_week}: {time.monotonic() - tw:.0f} s, {players.height} players, "
+            f"{len(leagues)} scoring setups ({time.monotonic() - t0:.0f} s so far)"
         )
     if not out:
         return pl.DataFrame()
