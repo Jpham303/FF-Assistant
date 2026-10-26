@@ -88,3 +88,15 @@ def test_api_and_tool(trade_league, client, monkeypatch):  # noqa: F811
         assert t["you"]["per_week"] == 11.0
     finally:
         mcp_server.set_client(None)
+
+
+def test_trade_with_an_unprojected_player_is_refused_not_valued_at_zero(trade_league):
+    db_, row, wh = trade_league
+    # A player on the partner's roster with no rest-of-season rows (the bye-week bug).
+    db_.add(RosterEntryRow(team_id="sleeper:1:9", platform_player_id="00-W", player_key="00-W",
+                           name="Wash Ington", position="WR", slot_type="bench"))  # fmt: skip
+    db_.commit()
+    con = duck.connect(wh)
+    with pytest.raises(LookupError, match="Wash Ington"):
+        service.evaluate_trade(con, db_, row, from_sleeper(row.scoring), SEASON, WEEK,
+                               give=["00-A"], get=["00-W"], fetch=_schedule)  # fmt: skip

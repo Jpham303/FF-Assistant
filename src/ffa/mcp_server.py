@@ -78,6 +78,8 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    realistic for them?), playoff odds before/after, any free agent added (by name, with
    his points) or player dropped, and the flags in how_it_looks. p_ahead is approximate
    (players treated as independent); say so if it's near 50%.
+12. A player in rest_of_season's not_found has NO projection: say it's missing (a data
+   problem to report), never treat him as worth 0 points or compare anyone against him.
 """
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)

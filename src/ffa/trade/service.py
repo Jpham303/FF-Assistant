@@ -39,6 +39,13 @@ def evaluate_trade(con, db, row: LeagueRow, rules: ScoringRules, season: int, we
     if len(partners) != 1:
         raise ValueError("The players you'd get must all be on one team")
     partner = partners.pop()
+    # Never value a traded player at 0 because he's missing from the projections.
+    unprojected = [k for k in give + get if lg.weeks and not lg.players[k].weekly]
+    if unprojected:
+        raise LookupError(
+            f"No rest-of-season projection for {', '.join(_names(lg, unprojected))}, so this "
+            "trade can't be valued. Re-run ros_projections in Dagster; if he's still missing, "
+            "it's a bug (not a 0-point player).")  # fmt: skip
     res = core.evaluate(lg, ctx.me, partner, give, get, playoff_weighting)
     res["you"]["team_name"] = lg.teams[ctx.me].name
     res["them"]["team_name"] = lg.teams[partner].name

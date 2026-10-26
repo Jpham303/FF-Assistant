@@ -93,6 +93,7 @@ def _teams(team_games: pl.DataFrame, models: Models, season: int, week: int) -> 
     )  # fmt: skip
 
 
+ROSTER_STALE = 2  # a team's latest roster may be this many weeks old (a bye is one)
 RECENT_TEAM_GAMES = 2  # an absent player still holds a role if he played this recently
 
 
@@ -100,7 +101,20 @@ def _roster(rosters: pl.DataFrame, season: int, week: int) -> pl.DataFrame:
     """This week's roster: active players, plus inactive / injured-reserve players (who
     will not play) so that a recently absent starter's role can pass to his teammates."""
     r = rosters.filter((pl.col("season") == season) & (pl.col("week") <= week))
-    latest = r.filter(pl.col("week") == r["week"].max()) if r.height else r
+    latest = r
+    if r.height:
+        # nflverse's weekly rosters leave out teams on bye, so each team's roster is its
+        # own latest week (within ROSTER_STALE weeks), not the file's latest week. A
+        # player listed by two teams (traded or signed since) keeps the newer listing.
+        top = r["week"].max()
+        team_week = r.group_by("team").agg(pl.col("week").max().alias("_tw"))
+        latest = (
+            r.join(team_week, on="team")
+            .filter((pl.col("week") == pl.col("_tw")) & (pl.col("_tw") >= top - ROSTER_STALE))
+            .sort("week")
+            .unique("gsis_id", keep="last")
+            .drop("_tw")
+        )
     return (
         latest.filter(
             pl.col("status").is_in(["ACT", "INA", "RES"])

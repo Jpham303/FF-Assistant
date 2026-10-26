@@ -105,3 +105,23 @@ def test_todays_category_uses_this_weeks_full_picture():
     got = dict(ros._with_current(st, players).select("key", "cat").iter_rows())
     assert got == {"a": "out", "b": "out", "c": "questionable", "d": "healthy",
                    "e": "healthy"}  # e: on bye this week, unchanged  # fmt: skip
+
+
+def test_roster_keeps_teams_on_bye_in_the_latest_week():
+    """nflverse's weekly rosters leave out teams on bye: their players must still be on
+    the roster (each team's own latest week), or rest of season loses them entirely."""
+    from ffa.model.inputs import _roster
+
+    def row(key, team, week, status="ACT"):
+        return {"gsis_id": key, "full_name": key, "team": team, "position": "WR",
+                "status": status, "season": 2026, "week": week}  # fmt: skip
+
+    r = pl.DataFrame([
+        row("A", "PHI", 5), row("A", "PHI", 6),
+        row("W", "JAX", 5),                          # JAX on bye in week 6
+        row("T", "JAX", 5), row("T", "KC", 6),       # traded JAX -> KC: newer listing wins
+        row("S", "NYJ", 2),                          # stale team: dropped
+    ])  # fmt: skip
+    out = _roster(r, 2026, 6).sort("key")
+    assert out["key"].to_list() == ["A", "T", "W"]
+    assert dict(zip(out["key"], out["team"], strict=True)) == {"A": "PHI", "T": "KC", "W": "JAX"}
