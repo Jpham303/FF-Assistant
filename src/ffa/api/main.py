@@ -360,6 +360,44 @@ def projections(
     return [Player(**startsit.as_dict(views[k]), rest_of_season=rest.get(k)) for k in ks]
 
 
+class TradeRequest(BaseModel):
+    give: list[str] = Field(min_length=1, max_length=4, description="Your players (keys)")
+    get: list[str] = Field(
+        min_length=1, max_length=4, description="Players you'd receive (keys), all from one team"
+    )
+    league: str | None = None
+    playoff_weighting: bool = Field(
+        False, description="Count fantasy playoff weeks double in the rest-of-season totals"
+    )
+
+
+@app.post("/trade/evaluate")
+def trade_evaluate(req: TradeRequest, con=Depends(get_con), db=Depends(get_db)) -> dict:
+    """A trade's effect on both lineups for every remaining week (rest of season, per week,
+    playoff weeks), roster moves (drops; named free-agent adds), how it looks (season-to-
+    date rank for same-position trades, projected points otherwise), playoff odds before
+    and after, a verdict and the reasons."""
+    if db is None:
+        raise HTTPException(503, "App database not configured")
+    row = _league(db, req.league)
+    if row is None:
+        raise HTTPException(404, "No league: pass league (see /leagues)")
+    if set(req.give) & set(req.get):
+        raise HTTPException(422, "A player can't be on both sides")
+    season, w = _week(con, None)
+    rules, label = _rules(row)
+    from ffa.trade import service as trade_service
+
+    try:
+        out = trade_service.evaluate_trade(con, db, row, rules, season, w, req.give, req.get,
+                                           req.playoff_weighting)  # fmt: skip
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    except LookupError as e:
+        raise HTTPException(503, str(e)) from e
+    return out | {"league": row.name, "season": season, "from_week": w}
+
+
 @app.get("/rest-of-season")
 def rest_of_season(
     keys: str = Query(description="Comma-separated player keys"), league: str | None = None,

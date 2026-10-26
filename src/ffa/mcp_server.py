@@ -72,6 +72,12 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    user set them (locked=true), final games with their actual points; lineup_total
    (actual + projected) is what the matchup odds use, points_so_far what's banked. Never
    suggest moving a locked player; in start/sit, relay the note when one is locked.
+11. Trade questions ("should I trade X for Y", "is this fair"): call evaluate_trade, never
+   web search. Lead with the verdict and its reason, then your lineup change per week and
+   over the rest of the season (and in playoff weeks), the other team's change (is it
+   realistic for them?), playoff odds before/after, any free agent added (by name, with
+   his points) or player dropped, and the flags in how_it_looks. p_ahead is approximate
+   (players treated as independent); say so if it's near 50%.
 """
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
@@ -247,6 +253,29 @@ def rest_of_season(players: list[str], league: str | None = None) -> dict:
             return {"unresolved": problems, "resolved_keys": keys}
         params = {"keys": ",".join(keys)} | ({"league": league} if league else {})
         return _call("GET", "/rest-of-season", params=params)
+    except ApiError as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(annotations=READ_ONLY)
+def evaluate_trade(give: list[str], get: list[str], league: str | None = None,
+                   playoff_weighting: bool = False) -> dict:  # fmt: skip
+    """Should I make this trade? Evaluates a proposed trade in the user's league: how both
+    teams' best weekly lineups change for every remaining week (per week, rest of season,
+    fantasy playoff weeks), who gets dropped and which free agent fills a freed spot
+    (named, with the points he adds), how it looks to managers (season-to-date positional
+    rank for same-position trades, projected points otherwise, with stale-rank flags),
+    playoff odds before and after for both teams, a verdict and the reasons.
+    give: the user's players; get: players from ONE other team (names or keys, up to 4 a
+    side). playoff_weighting: count playoff weeks double. Read-only: it never proposes
+    anything in Sleeper."""
+    try:
+        keys_give, p1 = _resolve(give, None, need_projection=False)
+        keys_get, p2 = _resolve(get, None, need_projection=False)
+        if p1 or p2:
+            return {"unresolved": p1 + p2}
+        body = {"give": keys_give, "get": keys_get, "playoff_weighting": playoff_weighting}
+        return _call("POST", "/trade/evaluate", json=body | ({"league": league} if league else {}))
     except ApiError as e:
         return {"error": str(e)}
 
