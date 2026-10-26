@@ -1,9 +1,9 @@
 """Trade evaluation on rest-of-season projections (pure: no database, no network).
 
 A trade's value to a team is the change in its best weekly lineup, summed over the
-remaining weeks, measured from the roster after the waiver moves it could already make
-(with_waivers: the service applies it first, so free pickups aren't credited to a trade), (fantasy playoff weeks optionally counted double), after both rosters
-change: the side receiving more players drops its least valuable ones, and the side
+remaining weeks (fantasy playoff weeks optionally counted double), after both rosters
+change, measured from the roster after the waiver moves the team could already make
+(with_waivers, applied first by the service, so free pickups aren't credited to a trade): the side receiving more players drops its least valuable ones, and the side
 receiving fewer fills each freed roster spot with the best free agent (named, with what
 he adds). Lineups are filled by expected points (chance to play included), most
 restrictive slot first, the same rule as my_team.
