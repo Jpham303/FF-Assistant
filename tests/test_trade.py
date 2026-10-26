@@ -153,3 +153,21 @@ def test_search_never_returns_a_trade_that_guts_them():
     # for scraps costs them far more than THEIR_MAX_LOSS a week: never suggested.
     for p in search.search(lg, "me"):
         assert not {"WR3", "WR4"} <= set(p.get) or p.theirs >= -search.THEIR_MAX_LOSS * len(WEEKS)
+
+
+def test_waiver_baseline_makes_only_the_moves_that_help_and_protects_named_players():
+    lg = _league()
+    out, moves = core.with_waivers(lg)
+    got = [(m.team, m.add.key, round(m.add.points, 1), m.drop.key if m.drop else None)
+           for m in moves]  # fmt: skip
+    # You: RBBYE (9 in weeks 8 and 10, bye in 9) takes the flex from WR2 (6) in those two
+    # weeks: +3 +3 = 6, dropping RB3 (5, never starts). Then RBFA (7) beats WR2 (6) at
+    # flex in week 9 only: +1 over 3 weeks = 0.33 a week, just over WAIVER_MIN (0.3).
+    # Them: RB3, just dropped, fills their empty second RB slot: +5 a week = 15,
+    # dropping WR5 (bench). RBFA for anything else adds under 0.3 a week: no more moves.
+    assert got == [("me", "RBBYE", 6.0, "RB3"), ("me", "RBFA", 1.0, "WR2"),
+                   ("them", "RB3", 15.0, "WR5")]  # fmt: skip
+    assert set(out.free_agents) == {"WRFA", "WR2", "WR5"}
+    assert lg.teams["me"].roster == ["QB1", "RB1", "RB2", "RB3", "WR1", "WR2"]  # original kept
+    _, moves2 = core.with_waivers(lg, protect=frozenset({"RB3", "WR2"}))
+    assert all(m.drop is None or m.drop.key not in ("RB3", "WR2") for m in moves2)

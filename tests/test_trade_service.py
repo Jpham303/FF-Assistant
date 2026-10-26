@@ -53,10 +53,15 @@ def test_evaluate_trade_both_sides_free_agent_and_playoff_odds(trade_league):
                                give=["00-A"], get=["00-Q"], fetch=_schedule)  # fmt: skip
     weeks = list(range(WEEK, 11))
     assert r["weeks"] == weeks and r["playoff_weeks"] == [9, 10]
-    # You (QB, RB, WR, FLEX): before 0 + Alpha 14 + Charlie 12 + Bravo 9 = 35; after
-    # Quinn 18 + Bravo 9 + Charlie 12 + Delta 7 = 46: +11 a week, 5 weeks. They lose
-    # Quinn's 18 and start Alpha (14): -4 a week.
-    assert r["you"]["per_week"] == 11.0 and r["you"]["ros_change"] == 55.0
+    # Waiver baseline first: you'd already add the free agent Foxtrot (WR 11) into your
+    # open roster spot; he takes the flex from Bravo (9): +2 a week without any trade.
+    # You (QB, RB, WR, FLEX), from that baseline: before 0 + Alpha 14 + Charlie 12 +
+    # Foxtrot 11 = 37; after Quinn 18 + Bravo 9 + Charlie 12 + Foxtrot 11 = 50: +13 a
+    # week, 5 weeks. (Without the baseline it read +11 from 35 to 46.) They lose Quinn's
+    # 18 and start Alpha (14): -4 a week.
+    moves = r["waiver_baseline"]["moves"]
+    assert [(m["add"], m["drop"]) for m in moves] == [("00-F", None)]  # an open spot
+    assert r["you"]["per_week"] == 13.0 and r["you"]["ros_change"] == 65.0
     assert r["them"]["per_week"] == -4.0 and r["them"]["team_name"] == "Theirs"
     assert r["playoff_odds"]["you"]["after"] > r["playoff_odds"]["you"]["before"]
     assert r["give"] == ["00-A"] and r["get"] == ["00-Q"]
@@ -76,7 +81,7 @@ def test_api_and_tool(trade_league, client, monkeypatch):  # noqa: F811
                                              "league": "sleeper:1"})  # fmt: skip
     assert r.status_code == 200, r.text
     d = r.json()
-    assert d["verdict"] in ("accept", "decline", "close call") and d["you"]["per_week"] == 11.0
+    assert d["verdict"] in ("accept", "decline", "close call") and d["you"]["per_week"] == 13.0
     bad = client.post("/trade/evaluate", json={"give": ["00-Q"], "get": ["00-A"],
                                                "league": "sleeper:1"})  # fmt: skip
     assert bad.status_code == 422 and "Not on your roster" in bad.text
@@ -85,7 +90,7 @@ def test_api_and_tool(trade_league, client, monkeypatch):  # noqa: F811
         from tests.test_mcp import call
 
         t = call("evaluate_trade", give=["Alpha Back"], get=["Quinn Passer"], league="sleeper:1")
-        assert t["you"]["per_week"] == 11.0
+        assert t["you"]["per_week"] == 13.0
     finally:
         mcp_server.set_client(None)
 

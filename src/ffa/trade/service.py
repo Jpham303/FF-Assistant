@@ -46,7 +46,9 @@ def evaluate_trade(con, db, row: LeagueRow, rules: ScoringRules, season: int, we
             f"No rest-of-season projection for {', '.join(_names(lg, unprojected))}, so this "
             "trade can't be valued. Re-run ros_projections in Dagster; if he's still missing, "
             "it's a bug (not a 0-point player).")  # fmt: skip
+    waivers = _apply_waivers(ctx, playoff_weighting, frozenset(give + get))
     res = _evaluate(ctx, partner, give, get, playoff_weighting)
+    res["waiver_baseline"] = _waiver_dict(ctx, waivers, {ctx.me, partner})
     res["scoring"], res["as_of"], res["notes"] = ctx.scoring, ctx.as_of, ctx.notes
     if res["playoff_odds"] is None:
         ctx.notes.append("Playoff odds unavailable: the league's playoff settings or schedule "
@@ -108,6 +110,8 @@ def trade_targets(con, db, row: LeagueRow, rules: ScoringRules, season: int, wee
             raise ValueError(f"No team named {partner!r}. Teams: {', '.join(names)}")
         partners = [match[0].id]
     pos = position.upper() if position else None
+    waivers = _apply_waivers(ctx, playoff_weighting, frozenset(give))
+    lg = ctx.league
     found = search.search(lg, ctx.me, give=give, position=pos, partners=partners,
                           playoff_weighting=playoff_weighting)  # fmt: skip
     needs = search.needs(lg)
@@ -125,11 +129,40 @@ def trade_targets(con, db, row: LeagueRow, rules: ScoringRules, season: int, wee
         "needs_note": "Points a week your starters at each position trail (+) or lead (-) the "
                       "league's middle team there, rest of season.",
         "packages": packages,
+        "waiver_baseline": _waiver_dict(ctx, waivers, {ctx.me}),
         "searched": {"give": _names(lg, give), "position": pos,
                      "partner": lg.teams[partners[0]].name if partners else "every team",
                      "rule": f"you gain at least {search.MY_MIN_GAIN} a week, they lose at most "
                              f"{search.THEIR_MAX_LOSS} a week; up to {search.MAX_SIDE} a side"},
         "weeks": lg.weeks, "scoring": ctx.scoring, "as_of": ctx.as_of, "notes": ctx.notes,
+    }  # fmt: skip
+
+
+WAIVER_NOTE = (
+    "Scored after the free waiver moves each team could already make (best free agent added, "
+    "least valuable player dropped, when it adds at least {min} points a week): a trade gets "
+    "credit only for what it adds beyond those."
+)
+
+
+def _apply_waivers(ctx: context.Context, playoff_weighting: bool,
+                   protect: frozenset[str]) -> list[core.Waiver]:  # fmt: skip
+    """Swap ctx.league for the league after every team's helpful waiver moves, worst
+    record first (waiver priority)."""
+    order = sorted(ctx.league.teams, key=lambda t: ctx.records.get(t, (0.0, 0.0)))
+    ctx.league, moves = core.with_waivers(ctx.league, playoff_weighting, protect, order)
+    return moves
+
+
+def _waiver_dict(ctx: context.Context, moves: list[core.Waiver], teams: set[str]) -> dict:
+    lg = ctx.league
+    return {
+        "note": WAIVER_NOTE.format(min=core.WAIVER_MIN),
+        "moves": [{"team": lg.teams[m.team].name,
+                   "add": m.add.name, "add_position": m.add.position,
+                   "points_added": round(m.add.points, 1),
+                   "drop": m.drop.name if m.drop else None}
+                  for m in moves if m.team in teams],
     }  # fmt: skip
 
 

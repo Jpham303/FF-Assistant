@@ -1,7 +1,8 @@
 """Trade evaluation on rest-of-season projections (pure: no database, no network).
 
 A trade's value to a team is the change in its best weekly lineup, summed over the
-remaining weeks (fantasy playoff weeks optionally counted double), after both rosters
+remaining weeks, measured from the roster after the waiver moves it could already make
+(with_waivers: the service applies it first, so free pickups aren't credited to a trade), (fantasy playoff weeks optionally counted double), after both rosters
 change: the side receiving more players drops its least valuable ones, and the side
 receiving fewer fills each freed roster spot with the best free agent (named, with what
 he adds). Lineups are filled by expected points (chance to play included), most
@@ -136,7 +137,7 @@ def balance(lg: League, team: Team, after: list[str], received: int, gave: int,
     return roster, drops, adds
 
 
-def _fa_candidates(lg: League, taken: set[str]) -> list[str]:
+def _fa_candidates(lg: League, taken: set[str], per_position: int = FA_PER_POSITION) -> list[str]:
     by_pos: dict[str, list[str]] = {}
     for k in lg.free_agents:
         if k in taken or k not in lg.players:
@@ -145,8 +146,72 @@ def _fa_candidates(lg: League, taken: set[str]) -> list[str]:
     out = []
     for keys in by_pos.values():
         keys.sort(key=lambda k: -lg.players[k].ros(lg.weeks))
-        out += keys[:FA_PER_POSITION]
+        out += keys[:per_position]
     return out
+
+
+# ---------------------------------------------------------------- free waiver moves
+
+WAIVER_MIN = 0.3  # points a week a waiver move must add to count as one a manager would make
+WAIVER_MOVES = 3  # per team
+WAIVER_FA = 3  # free agents per position tried as a pickup
+WAIVER_DROPS = 3  # least valuable players tried as the drop
+
+
+@dataclass
+class Waiver:
+    team: str
+    add: Move
+    drop: Move | None  # None: an open roster spot
+
+
+def with_waivers(lg: League, playoff_weighting: bool = False, protect: frozenset[str] = frozenset(),
+                 order: list[str] | None = None) -> tuple[League, list[Waiver]]:  # fmt: skip
+    """The league after every team makes the waiver moves that already help it: add the
+    best free agent (into an open spot, or dropping its least valuable player), up to
+    WAIVER_MOVES each, teams in `order` (worst record first, like waiver priority). A
+    trade is then credited only for what it adds beyond moves either manager could make
+    without it. `protect`: players named in the trade, never dropped."""
+    pw = playoff_weighting
+    n = max(len(lg.weeks), 1)
+    teams = {tid: Team(t.id, t.name, list(t.roster), t.size_limit) for tid, t in lg.teams.items()}
+    out = League(lg.slots, lg.weeks, lg.playoff_weeks, lg.players, list(lg.free_agents), teams)
+    moves: list[Waiver] = []
+    taken: set[str] = set()
+    for tid in order or list(teams):
+        team = teams[tid]
+        for _ in range(WAIVER_MOVES):
+            roster = team.roster
+            base = value(out, roster, pw)
+            fas = _fa_candidates(out, taken, WAIVER_FA)
+            if len(roster) < max(team.size_limit, 1):
+                drops: list[str | None] = [None]
+            else:
+                cost = {k: base - value(out, [x for x in roster if x != k], pw)
+                        for k in roster if k not in protect}  # fmt: skip
+                drops = sorted(cost, key=cost.get)[:WAIVER_DROPS]
+            best, best_gain = None, WAIVER_MIN * n
+            for d in drops:
+                kept = [x for x in roster if x != d]
+                for f in fas:
+                    g = value(out, [*kept, f], pw) - base
+                    if g > best_gain:
+                        best, best_gain = (d, f), g
+            if best is None:
+                break
+            d, f = best
+            team.roster = [x for x in roster if x != d] + [f]
+            taken.add(f)
+            pf = lg.players[f]
+            add = Move(f, pf.name, pf.position, best_gain)
+            drop = None
+            if d is not None:
+                pd = lg.players.get(d)
+                drop = Move(d, pd.name if pd else d, pd.position if pd else "?", 0.0)
+                out.free_agents.append(d)
+            moves.append(Waiver(tid, add, drop))
+    out.free_agents = [k for k in out.free_agents if k not in taken]
+    return out, moves
 
 
 # ---------------------------------------------------------------- evaluation
