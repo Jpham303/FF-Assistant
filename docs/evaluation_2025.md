@@ -208,7 +208,7 @@ Bugs found and fixed during the backtest and the first live run:
 - Teams on bye at the cutoff week were missing entirely (found live, Oct 26: a trade was
   valued against a player with no projection). nflverse's weekly rosters leave out teams
   on bye, and the roster step used only the file's latest week. Each team now uses its own
-  latest roster week. The 8 and 12 cutoffs gained 10-15% more players; the table above is
+  latest roster week. Three of the four affected cutoffs gained 12-20% more rows (2024 week 8 had no byes); the table above is
   the re-run. The gate still passes: the model beats both paces at every position in 2025.
   The trade engine also now refuses to value a player with no projection instead of
   counting him as 0.
