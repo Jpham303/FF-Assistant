@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ffa.trade.core import League, after_trade, balance, lineup, value
+from ffa.trade.core import STREAMABLE, League, after_trade, balance, lineup, value
 
 MAX_SIDE = 4
 CANDIDATES = 6  # per side, per opponent: players tried when growing a package
@@ -170,8 +170,12 @@ def team_pool(lg: League, me: str, tid: str, *, give: tuple[str, ...] = (),
         if not grown:
             break
         beam = _best(grown, n, max_loss)
+    # Each side needs a real player: kickers and defenses are streamed, so they ride
+    # along as throw-ins but never make a trade on their own (no kicker-for-kicker).
+    real = lambda ks: any(lg.players[k].position not in STREAMABLE for k in ks)  # noqa: E731
     return [p for p in pool.values()
-            if p.mine >= MY_MIN_GAIN * n and p.theirs >= -max_loss * n]  # fmt: skip
+            if p.mine >= MY_MIN_GAIN * n and p.theirs >= -max_loss * n
+            and real(p.give) and real(p.get)]  # fmt: skip
 
 
 def _try(lg, me, tid, give, get, pw, pool) -> Package | None:

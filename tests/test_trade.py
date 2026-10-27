@@ -266,3 +266,45 @@ def test_ties_in_drop_cost_cut_the_player_with_fewer_points():
     # never the backup QB (45).
     after, drops, _ = core.balance(lg, them, [*them.roster, "DEFA"], set(), set())
     assert [d.key for d in drops] == ["WR6"]
+
+
+def test_kickers_and_defenses_are_worth_only_what_they_beat_the_waiver_wire_by():
+    """Oct 27: managers stream K and D/ST, so trading for one is worth what he beats the
+    week's best free agent by, not his points."""
+    lg = _league()
+    lg.slots = [*lg.slots, "DEF"]
+    for k, pts in (("DEF_MINE", 5), ("DEF_THEIRS", 9), ("DEF_FA", 7), ("DEF_FA2", 6)):
+        lg.players[k] = _p(k, "DEF", pts)
+    lg.teams["me"].roster.append("DEF_MINE")
+    lg.teams["them"].roster.append("DEF_THEIRS")
+    lg.free_agents += ["DEF_FA", "DEF_FA2"]
+    core.with_streams(lg)
+    assert lg.stream[("DEF", 8)] == 7  # the best free agent each week
+    me = lg.teams["me"].roster
+    # Your DEF (5) is below the stream (7): the slot counts 7, as if you streamed.
+    no_def = [k for k in me if k != "DEF_MINE"]
+    assert core.lineup(lg, me, 8)[0] == core.lineup(lg, no_def, 8)[0]
+    # Getting their DEF (9) is worth 9 - 7 = 2 a week to you, not 9 - 5 = 4.
+    assert core.lineup(lg, [*me, "DEF_THEIRS"], 8)[0] - core.lineup(lg, me, 8)[0] == 2
+
+
+def test_managers_credit_kickers_and_defenses_with_little_trade_value():
+    from ffa.trade import packages as P
+
+    d = Player("d", "d", "DEF", {}, per_game=9.0)
+    d.ppg, d.last3 = 9.0, 9.0
+    r = Player("r", "r", "RB", {}, per_game=9.0)
+    r.ppg, r.last3 = 9.0, 9.0
+    assert round(P.perceived(d), 6) == 0.9 and P.perceived(r) == 9.0
+
+
+def test_no_package_is_only_kickers_or_defenses_on_a_side():
+    lg = _league()
+    lg.slots = [*lg.slots, "K"]
+    for k, pts in (("K_MINE", 5), ("K_THEIRS", 9)):
+        lg.players[k] = _p(k, "K", pts)
+    lg.teams["me"].roster.append("K_MINE")
+    lg.teams["them"].roster.append("K_THEIRS")
+    for p in search.team_pool(lg, "me", "them", max_loss=5.0):
+        assert any(lg.players[k].position != "K" for k in p.give)
+        assert any(lg.players[k].position != "K" for k in p.get)

@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 
 from ffa.leagues.base import SLOT_ELIGIBILITY
 
+STREAMABLE = frozenset({"K", "DEF"})  # streamed from waivers week to week
+STREAMABLE_SEEN = 0.1  # share of their points managers credit in a trade
 PLAYOFF_WEIGHT = 2.0  # playoff weeks count this much when the toggle is on
 CLOSE = 0.5  # points a week: below this, a lineup change is a wash
 RANK_GAP = 10  # positional ranks: rank so far vs projected rank, flagged beyond this
@@ -76,6 +78,9 @@ class League:
     players: dict[str, Player]
     free_agents: list[str]
     teams: dict[str, Team]
+    # (position, week) -> the best free agent's expected points: kickers and defenses
+    # are streamed, so a K or DEF slot is never worth less than this (see with_streams)
+    stream: dict[tuple[str, int], float] = field(default_factory=dict)
 
     def weight(self, w: int, playoff_weighting: bool) -> float:
         return PLAYOFF_WEIGHT if playoff_weighting and w in self.playoff_weeks else 1.0
@@ -100,12 +105,34 @@ def lineup(lg: League, keys: list[str], w: int) -> tuple[float, float, list[str 
             e = p.weekly.get(w, (0.0, 0.0))[0]
             if best is None or e > best_e:
                 best, best_e = k, e
+        if elig and elig <= STREAMABLE:  # K, DEF: this week's best free agent instead
+            s = max(lg.stream.get((pos, w), 0.0) for pos in elig)
+            if s > best_e:
+                total += s
+                continue
         if best is not None and best_e > 0:
             used.add(best)
             starters[i] = best
             total += best_e
             var += lg.players[best].weekly[w][1] ** 2
     return total + _insurance(lg, keys, w, starters, used), var, starters
+
+
+def with_streams(lg: League) -> League:
+    """Set each week's streaming level for kickers and defenses: the best free agent
+    at the position that week. Managers stream them, so trading for one is worth only
+    what he beats the waiver wire by, week by week (Oct 27: packages padded with
+    defenses read as real value)."""
+    lg.stream = {}
+    for k in lg.free_agents:
+        p = lg.players.get(k)
+        if p is None or p.position not in STREAMABLE:
+            continue
+        for w in lg.weeks:
+            e = p.weekly.get(w, (0.0, 0.0))[0]
+            if e > lg.stream.get((p.position, w), 0.0):
+                lg.stream[(p.position, w)] = e
+    return lg
 
 
 def _insurance(lg: League, keys: list[str], w: int, starters: list[str | None],
@@ -245,7 +272,15 @@ def with_waivers(lg: League, playoff_weighting: bool = False, protect: frozenset
     n = max(len(lg.weeks), 1)
     teams = {tid: Team(t.id, t.name, list(t.roster), t.size_limit, set(t.ir), t.ir_slots)
              for tid, t in lg.teams.items()}  # fmt: skip
-    out = League(lg.slots, lg.weeks, lg.playoff_weeks, lg.players, list(lg.free_agents), teams)
+    out = League(
+        lg.slots,
+        lg.weeks,
+        lg.playoff_weeks,
+        lg.players,
+        list(lg.free_agents),
+        teams,
+        dict(lg.stream),
+    )
     moves: list[Waiver] = []
     taken: set[str] = set()
     for tid in order or list(teams):
@@ -408,7 +443,9 @@ def how_it_looks(lg: League, give: list[str], get: list[str]) -> dict:
                            f"give {next(iter(positions))}{bg}"  # fmt: skip
             out["favors"] = "you" if br < bg else "them" if br > bg else "even"
     else:
-        g, r = sum(p.ros(lg.weeks) for p in gp), sum(p.ros(lg.weeks) for p in rp)
+        seen = lambda ps: sum(p.ros(lg.weeks) * (STREAMABLE_SEEN if p.position in STREAMABLE  # noqa: E731
+                                                 else 1.0) for p in ps)  # fmt: skip
+        g, r = seen(gp), seen(rp)
         out["basis"] = f"rest-of-season projected points: you get {r:.1f}, give {g:.1f}"
         out["favors"] = "you" if r > g * 1.03 else "them" if g > r * 1.03 else "even"
     for p in gp + rp:

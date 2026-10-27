@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ffa.trade.core import League, Player
+from ffa.trade.core import STREAMABLE, STREAMABLE_SEEN, League, Player
 from ffa.trade.search import MY_MIN_GAIN, Package, team_pool
 
 GRADES = ("Likely", "Fair", "Stretch", "Long shot")
@@ -52,6 +52,8 @@ def perceived(p: Player) -> float:
         base = SEASON_WEIGHT * p.ppg + LAST3_WEIGHT * (p.last3 if p.last3 is not None
                                                         else p.ppg)  # fmt: skip
     base *= INJURY_FACTOR.get(p.injury or "", 1.0)
+    if p.position in STREAMABLE:  # kickers and defenses are streamed: little trade value
+        base *= STREAMABLE_SEEN
     for rounds, bump in DRAFT_PREMIUM:
         if p.draft_round is not None and p.draft_round <= rounds:
             return base * (1 + bump)

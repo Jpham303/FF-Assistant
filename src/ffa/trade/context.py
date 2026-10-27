@@ -106,7 +106,9 @@ def build(con, db, row: LeagueRow, rules: ScoringRules, season: int, week: int,
         teams[t.id] = core.Team(t.id, t.name, keys + sorted(ir), limit, ir,
                                 int(row.ir_slots or 0))  # fmt: skip
     free = [k for k in players if k not in rostered]
-    lg = core.League(list(row.lineup_slots), weeks, playoff_weeks, players, free, teams)
+    lg = core.with_streams(
+        core.League(list(row.lineup_slots), weeks, playoff_weeks, players, free, teams)
+    )
     ctx = Context(lg, me.id, {t.id: (t.wins + 0.5 * t.ties, float(t.points_for or 0.0))
                               for t in teams_rows},  # fmt: skip
                   playoff_teams=settings.get("playoff_teams"),
