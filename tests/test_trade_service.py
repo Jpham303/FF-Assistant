@@ -43,6 +43,9 @@ def trade_league(db, warehouse, monkeypatch):  # noqa: F811
     store.write(pl.DataFrame(rows), warehouse, ros.DATASET, volatile=True,
                 ingested_at=datetime.now(UTC))  # fmt: skip
     monkeypatch.setattr(gamestate, "fetch_matchups", _schedule)
+    # Hand-checked arithmetic on the snapshot's numbers: no live current week here (the
+    # splice is tested in test_ros).
+    monkeypatch.setattr(ros, "live_week", lambda *a, **k: pl.DataFrame())
     return db, row, warehouse
 
 

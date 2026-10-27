@@ -282,3 +282,100 @@ def summary(snap: pl.DataFrame, keys: list[str], league: str | None) -> dict[str
             ],
         }  # fmt: skip
     return out
+
+
+# ---------------------------------------------------------------- this week, live
+
+_LIVE: dict[tuple, pl.DataFrame] = {}  # (season, week, generated_at, leagues) -> rows
+
+
+def live_week(con, season: int, week: int, leagues: dict[str, dict]) -> pl.DataFrame:
+    """This week's rows from the latest weekly projection (the hourly run that my_team and
+    start/sit read), in the snapshot's columns, scored for each league the same way:
+    expected points = chance to play x points if active (forced-active batches for
+    unlikely players). Empty if this week hasn't been projected. Cached per run."""
+    from ffa.warehouse import duck
+
+    try:
+        sims_t = duck.week(con, "projection_sims", season, week)
+        inp_t = duck.week(con, "projection_inputs", season, week)
+    except duck.MissingPartition:
+        return pl.DataFrame()
+    gen = con.sql(f"select max(_ingested_at) from {sims_t}").fetchone()[0]
+    ck = (season, week, str(gen), tuple(sorted((k, str(sorted(v.items())))
+                                               for k, v in leagues.items())))  # fmt: skip
+    if ck in _LIVE:
+        return _LIVE[ck]
+    sims = con.sql(f"select * exclude (_ingested_at) from {sims_t}").pl()
+    inputs = con.sql(f"select * exclude (_ingested_at) from {inp_t}").pl()
+    try:
+        f_t = duck.week(con, "projection_sims_forced", season, week)
+        forced = con.sql(f"select * exclude (_ingested_at) from {f_t}").pl()
+    except duck.MissingPartition:
+        forced = None
+    play = dict(zip(inputs["key"], inputs["p_play"], strict=True))
+    sims = sims.with_columns(ifactive.active_flag(sims).alias("active"))
+    out = []
+    for league, scoring in leagues.items():
+        rules = from_sleeper(scoring)
+        pts = score(sims, rules).select("key", "sim", "fpts", "active")
+        fpts = None
+        if forced is not None and forced.height:
+            fpts = score(forced.drop("key").rename({"forced_key": "key"}), rules).select(
+                "key", "sim", "fpts")  # fmt: skip
+        sm = ifactive.summarize(pts, play, fpts)
+        sd = pts.group_by("key").agg(pl.col("fpts").std().alias("sd"))
+        out.append(sm.join(sd, on="key", how="left").select(
+            pl.lit(league).alias("league"), "key", "expected_points", "proj_if_active",
+            "p10_if_active", "p90_if_active", "play_probability", "sd",
+        ))  # fmt: skip
+    meta = sims.select("key", "name", "position", "team").unique("key").join(
+        inputs.select("key", "opponent"), on="key", how="left")  # fmt: skip
+    teams_t = duck.week(con, "projection_teams", season, week)
+    tm = con.sql(f"select * from {teams_t}").pl()
+    opp = tm.select("team", pl.col("opponent").alias("_opp"),
+                    (pl.col("lines_from_ratings").fill_null(False) if "lines_from_ratings"
+                     in tm.columns else pl.lit(False)).alias("lines_from_ratings"))  # fmt: skip
+    meta = meta.join(opp, on="team", how="left").with_columns(
+        pl.coalesce("opponent", "_opp").alias("opponent")).drop("_opp")  # fmt: skip
+    df = pl.concat(out).join(meta, on="key", how="left").with_columns(
+        pl.lit(week).cast(pl.Int32).alias("target_week"))  # fmt: skip
+    _LIVE.clear()  # one run at a time is all that's ever asked for
+    _LIVE[ck] = df
+    return df
+
+
+def with_live_week(snap: pl.DataFrame, live: pl.DataFrame, week: int) -> pl.DataFrame:
+    """The snapshot with this week's rows replaced by the live weekly projection, so the
+    rest of season always agrees with my_team for this week (the daily snapshot can be a
+    day old, or from before the week rolled over)."""
+    if snap.height == 0 or live.height == 0:
+        return snap
+    keep = live.filter(pl.col("league").is_in(snap["league"].unique().implode()))
+    rest = snap.filter(pl.col("target_week") != week)
+    fill = {c: None for c in snap.columns if c not in keep.columns}
+    keep = keep.with_columns(pl.lit(v).alias(c) for c, v in fill.items())
+    if "playoff" in snap.columns:  # this week's playoff flag, per league, from the snapshot
+        flags = snap.select("league", "playoff", "target_week").filter(
+            pl.col("target_week") == week).unique("league")  # fmt: skip
+        keep = keep.drop("playoff").join(flags.select("league", "playoff"), on="league",
+                                         how="left")  # fmt: skip
+        keep = keep.with_columns(pl.col("playoff").fill_null(False))
+    for c in ("season", "as_of_week", "week", "_ingested_at"):
+        if c in snap.columns:
+            keep = keep.with_columns(pl.lit(snap[c][0]).cast(snap[c].dtype).alias(c))
+    return pl.concat([rest, keep.select(snap.columns)], how="vertical_relaxed").sort(
+        "league", "key", "target_week")  # fmt: skip
+
+
+def current(con, db, season: int, week: int) -> pl.DataFrame:
+    """The latest rest-of-season snapshot with this week taken from the live weekly
+    projection (see with_live_week). What every reader of rest-of-season numbers uses."""
+    from ffa.tracking.snapshots import leagues_scoring  # local: tracking imports service
+
+    snap = latest(con, season, week)
+    if snap.height == 0:
+        return snap
+    have = set(snap["league"].unique().to_list())
+    leagues = {lg: sc for lg, sc in leagues_scoring(db).items() if lg in have}
+    return with_live_week(snap, live_week(con, season, week, leagues), week)

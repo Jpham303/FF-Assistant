@@ -181,3 +181,27 @@ def test_report_shows_sleeper_misses_and_availability():
     assert "model / Sleeper" in md and "80.0% / 80.0%" in md
     assert "| RB | 5 | 20.0% | 20.0% | 40.0% | 20.0% |" in md
     assert "| Questionable | 1 | 50.0% | 0.0% | 0.250 |" in md
+
+
+def test_rest_of_season_reruns_once_when_the_week_advances(wh, monkeypatch):
+    from datetime import UTC, datetime
+
+    import dagster as dg
+
+    import dagster_defs as d
+    from ffa.service import projections as P
+    from ffa.service import ros
+    from ffa.warehouse import store
+
+    monkeypatch.setattr(d.settings, "warehouse_dir", str(wh))
+    monkeypatch.setattr(d.settings, "current_season", SEASON)
+    monkeypatch.setattr(P, "upcoming_week", lambda con, season: 8)
+
+    def runs():
+        return [r.run_key for r in (d.ros_new_week(dg.build_sensor_context()) or [])]
+
+    assert runs() == [f"ros-new-week-{SEASON}-8"]  # week 8 has no snapshot yet
+    snap = pl.DataFrame({"league": ["default"], "key": ["a"], "target_week": [8],
+                         "expected_points": [1.0], "season": [SEASON], "week": [8]})  # fmt: skip
+    store.write(snap, wh, ros.DATASET, volatile=True, ingested_at=datetime.now(UTC))
+    assert runs() == []  # projected as of week 8: nothing to do

@@ -373,7 +373,7 @@ def projections(
     ks = [k.strip() for k in keys.split(",") if k.strip()]
     views = startsit.player_views(_views(con, ks, rules, season, w), rules)
     row = _league(db, league)
-    rest = ros.summary(_unplayed(con, ros.latest(con, season, w), season, w), ks,
+    rest = ros.summary(_unplayed(con, ros.current(con, db, season, w), season, w), ks,
                        row.id if row is not None else None)  # fmt: skip
     return [Player(**startsit.as_dict(views[k]), rest_of_season=rest.get(k)) for k in ks]
 
@@ -460,7 +460,7 @@ def rest_of_season(
     season, w = _week(con, None)
     row = _league(db, league)
     ks = [k.strip() for k in keys.split(",") if k.strip()]
-    snap = ros.latest(con, season, w)
+    snap = ros.current(con, db, season, w)
     if snap.height == 0:
         raise HTTPException(
             503, "No rest-of-season projections yet: run ros_projections in Dagster "

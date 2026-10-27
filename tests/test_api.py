@@ -337,3 +337,22 @@ def test_week_reports_sleeper_fetch_even_if_filed_under_last_week(warehouse, cli
 
     df, when = latest_sleeper_status(duck.connect(warehouse), SEASON, WEEK)
     assert when == fetched and df["key"].to_list() == ["00-A"]  # projections use it too
+
+
+def test_rest_of_season_this_week_matches_the_weekly_projection(client, warehouse):
+    from ffa.service import ros
+
+    rows = pl.DataFrame({
+        "league": ["default"] * 2, "key": ["00-A"] * 2, "name": ["Alpha Back"] * 2,
+        "position": ["RB"] * 2, "team": ["DAL"] * 2, "target_week": [WEEK, WEEK + 1],
+        "opponent": ["GB", "PHI"], "play_probability": [0.9, 0.9],
+        "expected_points": [99.0, 11.0], "proj_if_active": [99.0, 12.2], "sd": [5.0, 5.0],
+        "playoff": [False, False], "season": [SEASON] * 2, "week": [WEEK] * 2,
+    })  # fmt: skip
+    store.write(rows, warehouse, ros.DATASET, volatile=True, ingested_at=datetime.now(UTC))
+    weekly = client.get("/projections", params={"keys": "00-A"}).json()[0]
+    rest = client.get("/rest-of-season", params={"keys": "00-A"}).json()["players"][0]
+    this = next(w for w in rest["by_week"] if w["week"] == WEEK)
+    assert this["expected_points"] == pytest.approx(weekly["expected_points"], abs=0.01)
+    assert this["play_probability"] == pytest.approx(weekly["play_probability"], abs=0.001)
+    assert rest["total"] == pytest.approx(round(weekly["expected_points"] + 11.0, 1), abs=0.06)

@@ -37,7 +37,7 @@ def build(con, db, row: LeagueRow, rules: ScoringRules, season: int, week: int,
           now: datetime | None = None, fetch=None) -> Context:  # fmt: skip
     now = now or datetime.now(UTC)
     fetch = fetch or gamestate.fetch_matchups
-    snap = ros.latest(con, season, week)
+    snap = ros.current(con, db, season, week)  # this week: the live weekly projection
     if snap.height == 0:
         raise LookupError("No rest-of-season projections yet: run ros_projections in Dagster")
     have = set(snap["league"].unique().to_list())

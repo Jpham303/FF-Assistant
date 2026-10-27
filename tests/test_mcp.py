@@ -97,6 +97,8 @@ def test_rest_of_season_from_a_snapshot(tools, warehouse, monkeypatch):  # noqa:
         "season": [2026] * 3, "week": [6] * 3,
     })  # fmt: skip
     store.write(rows, warehouse, ros.DATASET, volatile=True, ingested_at=datetime.now(UTC))
+    # The snapshot's own numbers (the live current week is tested in test_ros).
+    monkeypatch.setattr(ros, "live_week", lambda *a, **k: pl.DataFrame())
     d = call("rest_of_season", players=["Alpha Back", "Echo Williams"])  # Echo: on bye
     p = {x["name"]: x for x in d["players"]}["Alpha Back"]
     assert p["total"] == 33.0 and p["playoff_weeks_total"] == 10.0 and len(p["by_week"]) == 3

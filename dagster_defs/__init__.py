@@ -627,6 +627,25 @@ def daily_ros(context: ScheduleEvaluationContext):
     return RunRequest(run_key=f"ros-{context.scheduled_execution_time}")
 
 
+@sensor(job=ros_job, minimum_interval_seconds=900,
+        default_status=DefaultSensorStatus.RUNNING)  # fmt: skip
+def ros_new_week(context: SensorEvaluationContext):
+    """Rest of season as soon as the NFL week advances, instead of waiting for 5:45 PM.
+    Oct 27: Monday's 5:45 PM run was still week 7 (Monday night's game not played), so
+    it left out Sunday's results and treated week 8 as a future week until Tuesday
+    evening. Once per week: a snapshot as of this week, from any run, satisfies it."""
+    con = duck.connect(settings.warehouse_dir, datasets=["schedules"])
+    season = settings.current_season
+    week = projections_mod.upcoming_week(con, season)
+    if week is None:
+        return
+    try:
+        duck.week(con, ros_mod.DATASET, season, week)
+        return  # already projected as of this week
+    except duck.MissingPartition:
+        yield RunRequest(run_key=f"ros-new-week-{season}-{week}")
+
+
 @asset(
     group_name="projections",
     deps=["sim_params", "matchup_model", "team_games", "player_games", "injuries", "rosters",
@@ -867,5 +886,5 @@ defs = Definitions(
         daily_ros,
         weekly_tracking,
     ],
-    sensors=[pre_kickoff_snapshot],
+    sensors=[pre_kickoff_snapshot, ros_new_week],
 )

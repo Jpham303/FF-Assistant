@@ -154,3 +154,32 @@ def test_weekly_projection_estimates_a_missing_line_and_flags_it():
     assert a["spread_for"] == pytest.approx(-b["spread_for"])
     posted = with_lines(tg, 2026, 1).filter(pl.col("week") == 1)
     assert not posted["lines_from_ratings"].any()  # posted lines are kept
+
+
+def test_this_weeks_rest_of_season_row_comes_from_the_live_weekly_projection():
+    """Oct 27: the snapshot was from Monday (before the week rolled over), so week 8 read
+    Javonte Williams 16.6 and Maye's chance to play 0.94 while my_team said 8.8 and 1.0."""
+    snap = pl.DataFrame({
+        "league": ["lg"] * 4, "key": ["a", "a", "b", "b"], "name": ["A", "A", "B", "B"],
+        "position": ["RB"] * 4, "team": ["DAL"] * 4, "target_week": [8, 9, 8, 9],
+        "opponent": ["ARI", "IND", "ARI", "IND"], "play_probability": [0.94, 0.9, 0.5, 0.5],
+        "expected_points": [16.6, 13.1, 5.0, 4.0], "proj_if_active": [16.6, 14.5, 10.0, 8.0],
+        "sd": [7.0, 7.0, 5.0, 5.0], "playoff": [False] * 4, "season": [2026] * 4,
+        "as_of_week": [7] * 4,
+    })  # fmt: skip
+    live = pl.DataFrame({
+        "league": ["lg", "other"], "key": ["a", "a"], "expected_points": [8.8, 9.0],
+        "proj_if_active": [8.8, 9.0], "p10_if_active": [3.5, 3.5], "p90_if_active": [14.6, 15.0],
+        "play_probability": [1.0, 1.0], "sd": [4.0, 4.0], "name": ["A", "A"],
+        "position": ["RB", "RB"], "team": ["DAL", "DAL"], "opponent": ["ARI", "ARI"],
+        "lines_from_ratings": [True, True], "target_week": [8, 8],
+    })  # fmt: skip
+    out = ros.with_live_week(snap, live, 8)
+    a8 = out.filter((pl.col("key") == "a") & (pl.col("target_week") == 8)).row(0, named=True)
+    assert (a8["expected_points"], a8["play_probability"]) == (8.8, 1.0)
+    assert a8["as_of_week"] == 7 and a8["league"] == "lg"
+    # Later weeks keep the snapshot; b isn't in the live run this week (ruled out of the
+    # projection, e.g. traded or released): his week-8 row goes, week 9 stays.
+    assert out.filter(pl.col("target_week") == 9)["expected_points"].to_list() == [13.1, 4.0]
+    assert out.filter(pl.col("key") == "b")["target_week"].to_list() == [9]
+    assert ros.with_live_week(snap, pl.DataFrame(), 8).equals(snap)  # no live run: as is
