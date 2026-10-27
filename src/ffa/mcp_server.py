@@ -95,9 +95,11 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    settle it, ask which one.
 15. "What trades should I offer", "any trades out there", "who would take X": call
    trade_packages. Lead with league_wide's Likely and Fair offers, then the best Stretch
-   and Long shot. For each: what the user gives and gets, his gain a week and theirs,
-   the grade and why (their lineup change and how it looks to them: reads_as), the
-   reasons for both sides, playoff odds. Grades are a scored judgment, not a probability.
+   and Long shot, then any Near miss (say what it missed by: grade_note). For each: what
+   the user gives and gets, his gain a week and theirs, the grade and its acceptance
+   parts (their lineup, how it looks, anyone they'd cut), reasons for both sides,
+   playoff odds. skipped_pickups are waiver pickups the trade leaves no room for, not
+   players he owns. Grades are a scored judgment, not a probability.
 """
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)

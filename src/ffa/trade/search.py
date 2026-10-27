@@ -41,6 +41,7 @@ class Package:
     mine: float  # your lineup change, rest of season (weighted if the toggle is on)
     theirs: float
     tags: list[str] = field(default_factory=list)
+    cuts: tuple[str, ...] = ()  # players they'd have to drop to fit the roster limit
 
     def key(self) -> tuple:
         return (self.partner, tuple(sorted(self.give)), tuple(sorted(self.get)))
@@ -75,14 +76,23 @@ def needs(lg: League) -> dict[str, dict[str, float]]:
 def score(lg: League, me: str, partner: str, give: tuple[str, ...], get: tuple[str, ...],
           playoff_weighting: bool = False) -> tuple[float, float]:  # fmt: skip
     """(your lineup change, theirs) over the rest of the season, rosters balanced."""
+    return score_full(lg, me, partner, give, get, playoff_weighting)[:2]
+
+
+def score_full(lg: League, me: str, partner: str, give: tuple[str, ...],
+               get: tuple[str, ...], playoff_weighting: bool = False,
+               ) -> tuple[float, float, tuple[str, ...]]:  # fmt: skip
+    """score, plus the players they'd have to cut (their acceptance pays for those)."""
     mine, theirs = lg.teams[me], lg.teams[partner]
     taken: set[str] = set()
-    out = []
+    out, cuts = [], ()
     for team, gave, got, other in ((mine, give, get, theirs), (theirs, get, give, mine)):
         after, ir = after_trade(team, gave, got, other)
-        after, _, _ = balance(lg, team, after, ir, taken, playoff_weighting)
+        after, drops, _ = balance(lg, team, after, ir, taken, playoff_weighting)
         out.append(value(lg, after, playoff_weighting) - value(lg, team.roster, playoff_weighting))
-    return out[0], out[1]
+        if team is theirs:
+            cuts = tuple(d.key for d in drops)
+    return out[0], out[1], cuts
 
 
 def _gain_if_added(lg: League, roster: list[str], k: str, base: float, pw: bool) -> float:
@@ -144,9 +154,9 @@ def team_pool(lg: League, me: str, tid: str, *, give: tuple[str, ...] = (),
     for g in gets[:SEEDS]:
         offers = [fixed] if fixed else [(x,) for x in gives[:SEEDS]]
         for gv_ in offers:
-            m, t = score(lg, me, tid, gv_, (g,), pw)
+            m, t, cuts = score_full(lg, me, tid, gv_, (g,), pw)
             if m > 0:
-                seeds.append(Package(tid, gv_, (g,), m, t))
+                seeds.append(Package(tid, gv_, (g,), m, t, cuts=cuts))
     pool = {p.key(): p for p in seeds}
     beam = _best(seeds, n, max_loss)
     # Grow: one more player on either side while it helps both (sweetener /
@@ -182,7 +192,7 @@ def _try(lg, me, tid, give, get, pw, pool) -> Package | None:
     p = Package(tid, give, get, 0.0, 0.0)
     if p.key() in pool:
         return None
-    p.mine, p.theirs = score(lg, me, tid, give, get, pw)
+    p.mine, p.theirs, p.cuts = score_full(lg, me, tid, give, get, pw)
     pool[p.key()] = p
     return p
 

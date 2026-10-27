@@ -3,24 +3,24 @@ be accepted (pure: no database, no network).
 
 For each opponent the target search's pool of packages (ffa.trade.search.team_pool,
 widened so long shots are found) is graded, and the best package in each grade where
-you gain is kept: some opponents get four, some none.
+you gain is kept: some opponents get four, some none. A package that misses a grade or
+a minimum by a hair is kept as that team's near miss instead of vanishing.
 
-Grades (a scored grade, not a probability: no data exists on offers turned down):
+Acceptance score, in points a week (the grade's inputs, weighed as the spec lists):
 
-- Likely     their lineup gains at least LIKELY_THEIR_GAIN a week, and it looks even or
-             better for them on what managers see
-- Fair       their lineup gains (or breaks even): both sides gain
-- Stretch    they lose up to STRETCH_MAX_LOSS a week, but it looks even or better for
-             them; you gain at least STRETCH_MY_GAIN (buying low / selling high)
-- Long shot  they lose more (up to LONG_SHOT_MAX_LOSS) and only what they see sells it
-             (it looks even or better for them); you gain at least LONG_SHOT_MY_GAIN
-- none       anything else: a trade that's worse for them and looks it isn't suggested
+    their lineup change
+    + LOOKS_WEIGHT x (what they get - what they give, perceived points a game)
+    - CUT_WEIGHT x (perceived points a game of anyone they'd have to cut)
+
+Grades by score (a scored grade, not a probability: no data exists on offers turned
+down): Likely >= 1.0, Fair >= 0, Stretch >= -1.0, Long shot >= -3.0. Every offer gains
+you at least OFFER_MIN_GAIN a week (LONG_SHOT_MY_GAIN for long shots).
 
 "What managers see" (perceived points a game): points per game so far in the league's
-scoring and over the last 3 games, discounted for this week's injury status, with a
-small premium for an early pick in the league's draft (name value). A side's players are
-weighted best first (STUD_WEIGHTS: depth is worth less than one better player), so a
-2-for-1 consolidation reads as managers read it.
+scoring and over the last 3 games, discounted for injury status, kickers and defenses
+at a tenth (streamed), with a small premium for an early pick in the league's draft
+(name value). A side's players are weighted best first (STUD_WEIGHTS: depth is worth
+less than one better player), so a 2-for-1 consolidation reads as managers read it.
 """
 
 from __future__ import annotations
@@ -31,15 +31,17 @@ from ffa.trade.core import CLOSE, STREAMABLE, STREAMABLE_SEEN, League, Player
 from ffa.trade.search import Package, team_pool
 
 GRADES = ("Likely", "Fair", "Stretch", "Long shot")
+NEAR_MISS = "Near miss"
+THRESHOLDS = (("Likely", 1.0), ("Fair", 0.0), ("Stretch", -1.0), ("Long shot", -3.0))
+LOOKS_WEIGHT = 0.3  # a perceived point a game they come out ahead = 0.3 a week of score
+CUT_WEIGHT = 0.3  # cutting a real player hurts: Lamar Jackson (~18 a game) costs ~5.4
 # An offer must gain you what a trade check calls a gain (core.CLOSE, 0.5 a week): under
 # it the 'gain' is within the model's noise, e.g. one week of flex shuffling (Oct 27).
 OFFER_MIN_GAIN = CLOSE
-LIKELY_THEIR_GAIN = 0.3  # points a week
-STRETCH_MAX_LOSS = 1.0
-STRETCH_MY_GAIN = 0.5
-LONG_SHOT_MAX_LOSS = 3.0  # beyond this a package isn't suggested at all
 LONG_SHOT_MY_GAIN = 1.0
-LOOKS_EVEN = 0.10  # perceived values within 10% read as even
+NEAR_SCORE = 0.25  # within this of the next grade (or of Long shot): said, or kept
+NEAR_GAIN = 0.1  # within this under your minimum gain: kept as a near miss
+LOOKS_EVEN = 0.10  # for 'reads as': perceived values within 10% read as even
 SEASON_WEIGHT, LAST3_WEIGHT = 0.6, 0.4
 INJURY_FACTOR = {
     "Out": 0.3,
@@ -83,20 +85,42 @@ def looks_for_them(lg: League, give: tuple[str, ...], get: tuple[str, ...]) -> f
     return (gets - gives) / max(gives, 1.0)
 
 
-def grade(mine: float, theirs: float, looks: float) -> str | None:
-    """mine / theirs: lineup change a week; looks: looks_for_them."""
+def acceptance(lg: League, p: Package, theirs: float,
+               untradeable: frozenset[str] = frozenset()) -> tuple[float, dict]:  # fmt: skip
+    """Their acceptance score (points a week) and its parts. theirs: their lineup change a
+    week. Players they'd 'cut' who are only the waiver baseline's pickups cost nothing:
+    they never had them."""
+    looks_pts = side_value(lg, p.give) - side_value(lg, p.get)
+    cut = [k for k in p.cuts if k not in untradeable and k in lg.players]
+    cut_pts = sum(perceived(lg.players[k]) for k in cut)
+    score = theirs + LOOKS_WEIGHT * looks_pts - CUT_WEIGHT * cut_pts
+    return score, {"their_lineup": round(theirs, 2),
+                   "how_it_looks": round(LOOKS_WEIGHT * looks_pts, 2),
+                   "cuts": round(-CUT_WEIGHT * cut_pts, 2),
+                   "cut_players": [lg.players[k].name for k in cut]}  # fmt: skip
+
+
+def grade(mine: float, score: float) -> tuple[str | None, str | None]:
+    """(grade, note): the grade, or NEAR_MISS when a minimum is missed by a hair, or
+    None; the note says how far from the next grade up (or the minimum) it is."""
     if mine < OFFER_MIN_GAIN:
-        return None
-    even = looks >= -LOOKS_EVEN
-    if theirs >= LIKELY_THEIR_GAIN and even:
-        return "Likely"
-    if theirs >= 0:
-        return "Fair"
-    if theirs >= -STRETCH_MAX_LOSS and even and mine >= STRETCH_MY_GAIN:
-        return "Stretch"
-    if theirs >= -LONG_SHOT_MAX_LOSS and even and mine >= LONG_SHOT_MY_GAIN:
-        return "Long shot"  # only what he sees (a name, a hot streak) sells it
-    return None
+        if mine >= OFFER_MIN_GAIN - NEAR_GAIN and score >= THRESHOLDS[-1][1]:
+            return NEAR_MISS, (f"your gain {mine:.2f} a week, {OFFER_MIN_GAIN - mine:.2f} "
+                               f"under the {OFFER_MIN_GAIN} minimum")  # fmt: skip
+        return None, None
+    for k, (g, cut) in enumerate(THRESHOLDS):
+        if score < cut:
+            continue
+        if g == "Long shot" and mine < LONG_SHOT_MY_GAIN:
+            return NEAR_MISS, (f"a long shot only if you gained {LONG_SHOT_MY_GAIN} a week "
+                               f"(you gain {mine:.2f})")  # fmt: skip
+        if k > 0 and THRESHOLDS[k - 1][1] - score <= NEAR_SCORE:
+            up, line = THRESHOLDS[k - 1]
+            return g, f"{line - score:.2f} short of {up}"
+        return g, None
+    if score >= THRESHOLDS[-1][1] - NEAR_SCORE and mine >= LONG_SHOT_MY_GAIN:
+        return NEAR_MISS, f"{THRESHOLDS[-1][1] - score:.2f} short of Long shot"
+    return None, None
 
 
 @dataclass
@@ -105,7 +129,10 @@ class Offer:
     package: Package
     mine: float  # a week
     theirs: float
-    looks: float
+    looks: float  # looks_for_them, for 'reads as'
+    score: float = 0.0  # acceptance score, points a week
+    parts: dict = field(default_factory=dict)
+    note: str | None = None  # near a grade line: how far
     reasons_you: list[str] = field(default_factory=list)
     reasons_them: list[str] = field(default_factory=list)
 
@@ -113,7 +140,8 @@ class Offer:
 def generate(lg: League, me: str, *, playoff_weighting: bool = False,
              partners: list[str] | None = None,
              untradeable: frozenset[str] = frozenset()) -> dict[str, list[Offer]]:  # fmt: skip
-    """team -> its best offer in each grade (Likely first), you gaining in every one."""
+    """team -> its best offer in each grade (Likely first), you gaining in every one,
+    then its best near miss if one exists."""
     n = max(len(lg.weeks), 1)
     out: dict[str, list[Offer]] = {}
     for tid in lg.teams:
@@ -121,16 +149,18 @@ def generate(lg: League, me: str, *, playoff_weighting: bool = False,
             continue
         best: dict[str, Offer] = {}
         for p in team_pool(lg, me, tid, playoff_weighting=playoff_weighting,
-                           max_loss=LONG_SHOT_MAX_LOSS, untradeable=untradeable):  # fmt: skip
+                           max_loss=-THRESHOLDS[-1][1] + NEAR_SCORE,
+                           untradeable=untradeable):  # fmt: skip
             mine, theirs = p.mine / n, p.theirs / n
-            lk = looks_for_them(lg, p.give, p.get)
-            g = grade(mine, theirs, lk)
+            sc, parts = acceptance(lg, p, theirs, untradeable)
+            g, note = grade(mine, sc)
             if g is None:
                 continue
             cur = best.get(g)
-            if cur is None or (mine, theirs) > (cur.mine, cur.theirs):
-                best[g] = Offer(g, p, mine, theirs, lk)
-        out[tid] = [best[g] for g in GRADES if g in best]
+            if cur is None or (mine, sc) > (cur.mine, cur.score):
+                best[g] = Offer(g, p, mine, theirs, looks_for_them(lg, p.give, p.get), sc,
+                                parts, note)  # fmt: skip
+        out[tid] = [best[g] for g in (*GRADES, NEAR_MISS) if g in best]
     return out
 
 

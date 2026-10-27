@@ -33,18 +33,39 @@ def test_depth_is_worth_less_than_one_better_player():
     assert round(P.looks_for_them(lg, ("RB2", "RB3"), ("RB1",)), 4) == round((11.5 - 15) / 15, 4)
 
 
-def test_grades():
+def test_grades_come_from_the_acceptance_score():
     g = P.grade
-    assert g(0.05, 1.0, 0.0) is None  # you don't gain: never suggested
-    assert g(0.4, 1.0, 0.0) is None  # under 0.5 a week: within the noise (a close call)
-    assert g(1.0, 0.5, 0.0) == "Likely"  # they gain, looks even
-    assert g(1.0, 0.5, -0.3) == "Fair"  # they gain, but it looks worse to them
-    assert g(1.0, 0.0, 0.0) == "Fair"  # break even
-    assert g(0.8, -0.6, 0.05) == "Stretch"  # small loss, looks fine to them
-    assert g(0.45, -0.6, 0.05) is None  # ... but you must gain at least 0.5
-    assert g(2.0, -2.5, 0.2) == "Long shot"  # bigger loss, a name sells it
-    assert g(2.0, -2.5, -0.3) is None  # bigger loss and it looks it: not suggested
-    assert g(2.0, -3.5, 0.5) is None  # past LONG_SHOT_MAX_LOSS
+    assert g(1.0, 1.2) == ("Likely", None)
+    assert g(1.0, 0.9) == ("Fair", "0.10 short of Likely")  # near the line: said
+    assert g(1.0, 0.3) == ("Fair", None)
+    assert g(1.0, -0.5) == ("Stretch", None)
+    assert g(1.0, -2.0) == ("Long shot", None)
+    assert g(0.7, -2.0)[0] == P.NEAR_MISS  # a long shot needs you +1.0: near miss
+    assert g(2.0, -3.1) == (P.NEAR_MISS, "0.10 short of Long shot")
+    assert g(2.0, -4.0) == (None, None)
+    assert g(0.45, 1.5)[0] == P.NEAR_MISS  # 0.05 under your 0.5 minimum
+    assert g(0.2, 1.5) == (None, None)  # well under: noise
+
+
+def test_how_it_looks_and_cuts_move_the_score():
+    """Oct 27: Pierce (IR) for Stevenson graded Fair though it read 0.88 worse for them;
+    a 4-for-1 graded Likely though they'd cut Lamar Jackson and DJ Moore."""
+    lg = _league()
+    for k, v in (("RB1", 15.0), ("RB2", 10.0), ("RB3", 5.0), ("WR4", 11.0), ("QB2", 18.0)):
+        lg.players[k].ppg, lg.players[k].last3 = v, v
+    from ffa.trade.search import Package
+
+    # They give WR4 (11) for RB3 (5): looks -6 a game -> -1.8 a week of score.
+    pk = Package("them", ("RB3",), ("WR4",), 0.0, 0.0)
+    sc, parts = P.acceptance(lg, pk, theirs=0.5)
+    assert round(parts["how_it_looks"], 2) == -1.8 and round(sc, 2) == -1.3
+    # The same, but they have to cut QB2 (18 a game): another -5.4.
+    pk.cuts = ("QB2",)
+    sc2, parts2 = P.acceptance(lg, pk, theirs=0.5)
+    assert round(parts2["cuts"], 2) == -5.4 and round(sc2, 2) == -6.7
+    assert parts2["cut_players"] == ["QB2"]
+    # A cut that's only the baseline's pickup costs nothing: they never had him.
+    assert round(P.acceptance(lg, pk, 0.5, frozenset({"QB2"}))[0], 2) == -1.3
 
 
 def test_generate_on_hand_built_rosters():
@@ -56,7 +77,8 @@ def test_generate_on_hand_built_rosters():
     offers = out["them"]
     assert offers, "RB3 for WR3 (+8 a week for you, even for them) at least"
     grades = [o.grade for o in offers]
-    assert grades == [g for g in P.GRADES if g in grades]  # Likely first, one per grade
+    order = [*P.GRADES, P.NEAR_MISS]
+    assert grades == [g for g in order if g in grades]  # Likely first, one per grade
     for o in offers:
-        assert o.mine >= P.OFFER_MIN_GAIN
-        assert P.grade(o.mine, o.theirs, o.looks) == o.grade
+        assert o.mine >= P.OFFER_MIN_GAIN - P.NEAR_GAIN
+        assert P.grade(o.mine, o.score)[0] == o.grade

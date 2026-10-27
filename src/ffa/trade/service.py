@@ -198,8 +198,9 @@ def trade_packages(con, db, row: LeagueRow, rules: ScoringRules, season: int, we
     waivers = _apply_waivers(ctx, playoff_weighting, frozenset())
     lg = ctx.league
     team_needs = search.needs(lg)
+    picked = _picked_up(waivers)
     offers = packages.generate(lg, ctx.me, playoff_weighting=playoff_weighting,
-                               partners=partners, untradeable=_picked_up(waivers))  # fmt: skip
+                               partners=partners, untradeable=picked)  # fmt: skip
     by_team, flat = [], []
     for tid, offs in offers.items():
         items = []
@@ -208,7 +209,9 @@ def trade_packages(con, db, row: LeagueRow, rules: ScoringRules, season: int, we
             res = _evaluate(ctx, tid, list(p.give), list(p.get), playoff_weighting)
             you, them = packages.reasons(lg, o, res, team_needs[tid])
             item = {
-                "grade": o.grade, "partner": lg.teams[tid].name,
+                "grade": o.grade, "grade_note": o.note,
+                "acceptance": {"score": round(o.score, 2), **o.parts},
+                "partner": lg.teams[tid].name,
                 "give": res["give"], "get": res["get"],
                 "you_per_week": round(o.mine, 2), "them_per_week": round(o.theirs, 2),
                 "you_playoff_weeks": res["you"]["playoff_weeks_change"],
@@ -216,30 +219,26 @@ def trade_packages(con, db, row: LeagueRow, rules: ScoringRules, season: int, we
                 "what_they_see": _seen(lg, p.give, p.get, o.looks),
                 "shape": p.tags or ["straight swap"],
                 "playoff_odds": res["playoff_odds"],
-                "drops_you": res["you"]["drops"], "adds_you": res["you"]["adds"],
-                "drops_them": res["them"]["drops"], "adds_them": res["them"]["adds"],
+                **_moves(res["you"], picked, "you"), **_moves(res["them"], picked, "them"),
                 "verdict": res["verdict"], "p_ahead": res["p_ahead"],
             }  # fmt: skip
             items.append(item)
             flat.append(item)
         by_team.append({"team": lg.teams[tid].name, "packages": items})
-    order = {g: i for i, g in enumerate(packages.GRADES)}
+    order = {g: i for i, g in enumerate((*packages.GRADES, packages.NEAR_MISS))}
     flat.sort(key=lambda x: (order[x["grade"]], -x["you_per_week"]))
     return {
-        "grades": {
-            "Likely": f"their lineup gains at least {packages.LIKELY_THEIR_GAIN} a week and it "
-                      "looks even or better for them",
-            "Fair": "both lineups gain",
-            "Stretch": f"they lose up to {packages.STRETCH_MAX_LOSS} a week but it looks even "
-                       f"or better for them; you gain at least {packages.STRETCH_MY_GAIN}",
-            "Long shot": f"they lose up to {packages.LONG_SHOT_MAX_LOSS} a week; only what "
-                         "they see (a name, a hot streak) sells it; you gain at least "
-                         f"{packages.LONG_SHOT_MY_GAIN}",
-        },
-        "grade_note": f"Every offer gains you at least {packages.OFFER_MIN_GAIN} a week (less "
-                      "is within the model's noise). A scored grade, not a probability: "
-                      "there's no data on offers turned down. Completed trades in the league "
-                      "are logged to check it later.",
+        "grades": {g: f"acceptance score at least {line} a week" for g, line in
+                   packages.THRESHOLDS} | {packages.NEAR_MISS: "missed a grade or a minimum by a "
+                                           "hair (see grade_note)"},  # fmt: skip
+        "acceptance_note": (
+            f"Acceptance score = their lineup change a week + {packages.LOOKS_WEIGHT} x how it "
+            "looks to them (perceived points a game they come out ahead) - "
+            f"{packages.CUT_WEIGHT} x perceived points a game of anyone they'd have to cut. "
+            f"Every offer gains you at least {packages.OFFER_MIN_GAIN} a week "
+            f"({packages.LONG_SHOT_MY_GAIN} for a long shot); less is within the model's "
+            "noise. A scored grade, not a probability: there's no data on offers turned "
+            "down. Completed trades in the league are logged to check it later."),
         "by_team": by_team,
         "league_wide": flat,
         "waiver_baseline": _waiver_dict(ctx, waivers, {ctx.me}),
@@ -247,6 +246,18 @@ def trade_packages(con, db, row: LeagueRow, rules: ScoringRules, season: int, we
         "generated_at": t0.isoformat(),
         "seconds": round((datetime.now(UTC) - t0).total_seconds(), 1),
     }  # fmt: skip
+
+
+def _moves(side: dict, picked: frozenset[str], who: str) -> dict:
+    """Drops and adds, with the waiver baseline's pickups split out: 'dropping' one only
+    means the pickup no longer fits (Oct 27: Gadsden showed as dropped from a roster he
+    was never on)."""
+    drops = [d for d in side["drops"] if d["key"] not in picked]
+    skipped = [{"name": d["name"], "position": d["position"], "points": d["points"],
+                "note": "a waiver pickup the trade leaves no room for (not a player you "
+                        "own)" if who == "you" else "a waiver pickup the trade leaves them "
+                        "no room for"} for d in side["drops"] if d["key"] in picked]  # fmt: skip
+    return {f"drops_{who}": drops, f"adds_{who}": side["adds"], f"skipped_pickups_{who}": skipped}
 
 
 def _seen(lg: core.League, give, get, looks: float) -> dict:
