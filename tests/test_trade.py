@@ -281,9 +281,10 @@ def test_kickers_and_defenses_are_worth_only_what_they_beat_the_waiver_wire_by()
     core.with_streams(lg)
     assert lg.stream[("DEF", 8)] == 7  # the best free agent each week
     me = lg.teams["me"].roster
-    # Your DEF (5) is below the stream (7): the slot counts 7, as if you streamed.
+    # Your DEF (5) is below the stream (7): the slot counts 7, as if you streamed into
+    # his roster spot. With no defense rostered there's no spot to stream into: empty.
     no_def = [k for k in me if k != "DEF_MINE"]
-    assert core.lineup(lg, me, 8)[0] == core.lineup(lg, no_def, 8)[0]
+    assert core.lineup(lg, me, 8)[0] == core.lineup(lg, no_def, 8)[0] + 7
     # Getting their DEF (9) is worth 9 - 7 = 2 a week to you, not 9 - 5 = 4.
     assert core.lineup(lg, [*me, "DEF_THEIRS"], 8)[0] - core.lineup(lg, me, 8)[0] == 2
 
@@ -308,3 +309,32 @@ def test_no_package_is_only_kickers_or_defenses_on_a_side():
     for p in search.team_pool(lg, "me", "them", max_loss=5.0):
         assert any(lg.players[k].position != "K" for k in p.give)
         assert any(lg.players[k].position != "K" for k in p.get)
+
+
+def test_your_only_kicker_is_not_cut_for_free_when_streaming_needs_his_spot():
+    """Oct 27: Cam Little was dropped at -0.0 in several deals: the stream filled the K
+    slot without needing a roster spot."""
+    lg = _league()
+    lg.slots = [*lg.slots, "K"]
+    lg.players["K1"] = _p("K1", "K", 8)
+    lg.players["K_FA"] = _p("K_FA", "K", 9)  # the stream beats him every week
+    lg.free_agents.append("K_FA")
+    me = lg.teams["me"]
+    me.roster.append("K1")
+    me.size_limit = 7
+    core.with_streams(lg)
+    after, drops, _ = core.balance(lg, me, [*me.roster, "WR6"], set(), set())
+    # Over the limit by one: WR6 (3) or RB3 (5), both never start, go before the kicker,
+    # whose spot is the one you stream into (cutting him costs the whole K slot).
+    assert drops and all(d.key != "K1" for d in drops)
+
+
+def test_a_backups_value_shows_in_the_reasons():
+    lg = _league()
+    lg.players["WR1"].play = {w: 0.6 for w in WEEKS}  # your WR1 is 40% to miss
+    # Adding WRFA (6) as a bench WR: he covers WR1's absences, 0.4 x 6 = 2.4 a week,
+    # 7.2 over 3 weeks; shown as a reason (it used to be invisible).
+    side = core._side(lg, lg.teams["me"], lg.teams["me"].roster,
+                      [*lg.teams["me"].roster, "WRFA"], set(), set(), False)  # fmt: skip
+    assert any(x.startswith("WRFA (WR) as a backup") and x.endswith("+7.2 points")
+               for x in side.reasons)  # fmt: skip

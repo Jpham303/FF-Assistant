@@ -105,9 +105,13 @@ def lineup(lg: League, keys: list[str], w: int) -> tuple[float, float, list[str 
             e = p.weekly.get(w, (0.0, 0.0))[0]
             if best is None or e > best_e:
                 best, best_e = k, e
-        if elig and elig <= STREAMABLE:  # K, DEF: this week's best free agent instead
+        if best is not None and elig and elig <= STREAMABLE:
+            # K, DEF: you stream into the spot your rostered one holds, so this week's
+            # best free agent counts only when you roster one (Oct 27: Cam Little was
+            # 'cut' for free when the stream needed no roster spot).
             s = max(lg.stream.get((pos, w), 0.0) for pos in elig)
             if s > best_e:
+                used.add(best)  # his spot is the one the streamer uses
                 total += s
                 continue
         if best is not None and best_e > 0:
@@ -137,6 +141,17 @@ def with_streams(lg: League) -> League:
 
 def _insurance(lg: League, keys: list[str], w: int, starters: list[str | None],
                used: set[str]) -> float:  # fmt: skip
+    return sum(bench_credit(lg, keys, w, starters, used).values())
+
+
+def bench_credit(lg: League, keys: list[str], w: int, starters: list[str | None] | None = None,
+                 used: set[str] | None = None) -> dict[str, float]:  # fmt: skip
+    """Per backup, what he adds in week w (see _insurance). Shown in a trade's reasons
+    so a backup's value isn't invisible (Oct 27)."""
+    if starters is None:
+        _, _, starters = lineup(lg, keys, w)
+        used = {k for k in starters if k}
+    used = used or set()
     """What the bench adds: a starter who doesn't play is replaced by the best eligible
     bench player, so each backup is worth (chance the starter misses) x his expected
     points. Expected points alone value every backup at 0 (Oct 27: GeumSon 'cut' Lamar
@@ -150,17 +165,17 @@ def _insurance(lg: League, keys: list[str], w: int, starters: list[str | None],
         if miss > 0:
             misses.append((miss, i))
     if not misses:
-        return 0.0
+        return {}
     backups = {k: lg.players[k].weekly.get(w, (0.0, 0.0))[0] for k in keys
                if k not in used and k in lg.players}  # fmt: skip
-    out = 0.0
+    out: dict[str, float] = {}
     for miss, i in sorted(misses, reverse=True):
         elig = SLOT_ELIGIBILITY.get(lg.slots[i], frozenset())
         cand = [k for k, e in backups.items() if e > 0 and lg.players[k].position in elig]
         if not cand:
             continue
         b = max(cand, key=backups.get)
-        out += miss * backups.pop(b)
+        out[b] = miss * backups.pop(b)
     return out
 
 
@@ -349,10 +364,22 @@ def _side(lg: League, team: Team, before: list[str], after: list[str], ir_after:
           fa_taken: set[str], playoff_weighting: bool) -> Side:  # fmt: skip
     after, drops, adds = balance(lg, team, after, ir_after, fa_taken, playoff_weighting)
     per_week, reasons_pts = {}, {}
+    bench: dict[str, float] = {}  # backup value gained (+) or lost (-), rest of season
+    streamed = 0.0  # kicker / defense points from streaming, after - before
+
+    def parts(keys: list[str], w: int) -> tuple[float, list, dict[str, float], float]:
+        total, _, st = lineup(lg, keys, w)
+        cred = bench_credit(lg, keys, w)
+        starters = sum(lg.players[k].weekly[w][0] for k in st if k)
+        return total, st, cred, total - starters - sum(cred.values())
+
     for w in lg.weeks:
-        b, _, sb = lineup(lg, before, w)
-        a, _, sa = lineup(lg, after, w)
+        b, sb, cb, strb = parts(before, w)
+        a, sa, ca, stra = parts(after, w)
         per_week[w] = a - b
+        streamed += stra - strb
+        for k in set(ca) | set(cb):
+            bench[k] = bench.get(k, 0.0) + ca.get(k, 0.0) - cb.get(k, 0.0)
         for k in set(sa) - set(sb) - {None}:
             reasons_pts.setdefault(k, [0.0, 0])
             reasons_pts[k][0] += lg.players[k].weekly[w][0]
@@ -366,11 +393,23 @@ def _side(lg: League, team: Team, before: list[str], after: list[str], ir_after:
                 sum(per_week[w] for w in lg.weeks if w in lg.playoff_weeks),
                 drops, adds, roster=after)  # fmt: skip
     n = len(lg.weeks)
-    for k, (pts, weeks) in sorted(reasons_pts.items(), key=lambda kv: -abs(kv[1][0]))[:4]:
+    lines: list[tuple[float, str]] = []
+    for k, (pts, weeks) in reasons_pts.items():
         p = lg.players[k]
         verb = "starts" if pts > 0 else "no longer starts"
-        side.reasons.append(f"{p.name} ({p.position}) {verb} {weeks} of {n} weeks: "
-                            f"{pts:+.1f} points")  # fmt: skip
+        lines.append((pts, f"{p.name} ({p.position}) {verb} {weeks} of {n} weeks: "
+                           f"{pts:+.1f} points"))  # fmt: skip
+    for k, pts in bench.items():
+        if abs(pts) >= 0.5:
+            p = lg.players[k]
+            what = "as a backup, covering starters' absences" if pts > 0 else \
+                "no longer a backup for starters' absences"  # fmt: skip
+            lines.append((pts, f"{p.name} ({p.position}) {what}: {pts:+.1f} points"))
+    if abs(streamed) >= 0.5:
+        lines.append((streamed, f"Streaming kickers/defenses from waivers: {streamed:+.1f} "
+                                "points"))  # fmt: skip
+    for _, text in sorted(lines, key=lambda x: -abs(x[0]))[:4]:
+        side.reasons.append(text)
     return side
 
 

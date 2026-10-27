@@ -121,17 +121,34 @@ def build(con, db, row: LeagueRow, rules: ScoringRules, season: int, week: int,
 
 
 def _injuries(con, season: int, week: int, players: dict[str, core.Player]) -> None:
-    """This week's designation from the latest weekly projection (what managers see)."""
+    """Each player's injury status as a manager sees it: this week's designation from
+    the latest projection; else Sleeper's current status (covers players on bye and
+    reserve lists: Oct 27, Montgomery on a bye showed none); else on the team's reserve
+    list (IR)."""
+    from ffa.service.projections import latest_sleeper_status
     from ffa.warehouse import duck
 
     try:
+        sl, _ = latest_sleeper_status(con, season, week)
+    except Exception:  # noqa: BLE001  (no Sleeper fetch yet)
+        sl = None
+    if sl is not None and sl.height:
+        col = "designation" if "designation" in sl.columns else "status"
+        for r in sl.select("key", pl.coalesce(col, "status").alias("s")).iter_rows():
+            if r[0] in players and r[1]:
+                players[r[0]].injury = r[1]
+    try:
         t = duck.week(con, "projection_inputs", season, week)
-        rows = con.sql(f"select key, injury_status from {t}").fetchall()
-    except Exception:  # noqa: BLE001  (no projection yet: no statuses)
-        return
-    for k, st in rows:
-        if k in players and st:
+        rows = con.sql(f"select key, injury_status, roster_status from {t}").fetchall()
+    except Exception:  # noqa: BLE001  (no projection yet)
+        rows = []
+    for k, st, rs in rows:
+        if k not in players:
+            continue
+        if st:
             players[k].injury = st
+        elif rs == "RES" and not players[k].injury:
+            players[k].injury = "IR"
 
 
 def _ranks(con, rules, season: int, week: int,

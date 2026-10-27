@@ -36,11 +36,12 @@ def test_depth_is_worth_less_than_one_better_player():
 def test_grades():
     g = P.grade
     assert g(0.05, 1.0, 0.0) is None  # you don't gain: never suggested
+    assert g(0.4, 1.0, 0.0) is None  # under 0.5 a week: within the noise (a close call)
     assert g(1.0, 0.5, 0.0) == "Likely"  # they gain, looks even
     assert g(1.0, 0.5, -0.3) == "Fair"  # they gain, but it looks worse to them
     assert g(1.0, 0.0, 0.0) == "Fair"  # break even
     assert g(0.8, -0.6, 0.05) == "Stretch"  # small loss, looks fine to them
-    assert g(0.3, -0.6, 0.05) is None  # ... but you must gain at least 0.5
+    assert g(0.45, -0.6, 0.05) is None  # ... but you must gain at least 0.5
     assert g(2.0, -2.5, 0.2) == "Long shot"  # bigger loss, a name sells it
     assert g(2.0, -2.5, -0.3) is None  # bigger loss and it looks it: not suggested
     assert g(2.0, -3.5, 0.5) is None  # past LONG_SHOT_MAX_LOSS
@@ -57,5 +58,5 @@ def test_generate_on_hand_built_rosters():
     grades = [o.grade for o in offers]
     assert grades == [g for g in P.GRADES if g in grades]  # Likely first, one per grade
     for o in offers:
-        assert o.mine >= P.MY_MIN_GAIN
+        assert o.mine >= P.OFFER_MIN_GAIN
         assert P.grade(o.mine, o.theirs, o.looks) == o.grade

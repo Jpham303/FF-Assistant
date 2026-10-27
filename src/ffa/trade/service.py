@@ -236,8 +236,10 @@ def trade_packages(con, db, row: LeagueRow, rules: ScoringRules, season: int, we
                          "they see (a name, a hot streak) sells it; you gain at least "
                          f"{packages.LONG_SHOT_MY_GAIN}",
         },
-        "grade_note": "A scored grade, not a probability: there's no data on offers turned "
-                      "down. Completed trades in the league are logged to check it later.",
+        "grade_note": f"Every offer gains you at least {packages.OFFER_MIN_GAIN} a week (less "
+                      "is within the model's noise). A scored grade, not a probability: "
+                      "there's no data on offers turned down. Completed trades in the league "
+                      "are logged to check it later.",
         "by_team": by_team,
         "league_wide": flat,
         "waiver_baseline": _waiver_dict(ctx, waivers, {ctx.me}),

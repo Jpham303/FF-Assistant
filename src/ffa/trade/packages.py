@@ -27,10 +27,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ffa.trade.core import STREAMABLE, STREAMABLE_SEEN, League, Player
-from ffa.trade.search import MY_MIN_GAIN, Package, team_pool
+from ffa.trade.core import CLOSE, STREAMABLE, STREAMABLE_SEEN, League, Player
+from ffa.trade.search import Package, team_pool
 
 GRADES = ("Likely", "Fair", "Stretch", "Long shot")
+# An offer must gain you what a trade check calls a gain (core.CLOSE, 0.5 a week): under
+# it the 'gain' is within the model's noise, e.g. one week of flex shuffling (Oct 27).
+OFFER_MIN_GAIN = CLOSE
 LIKELY_THEIR_GAIN = 0.3  # points a week
 STRETCH_MAX_LOSS = 1.0
 STRETCH_MY_GAIN = 0.5
@@ -38,7 +41,15 @@ LONG_SHOT_MAX_LOSS = 3.0  # beyond this a package isn't suggested at all
 LONG_SHOT_MY_GAIN = 1.0
 LOOKS_EVEN = 0.10  # perceived values within 10% read as even
 SEASON_WEIGHT, LAST3_WEIGHT = 0.6, 0.4
-INJURY_FACTOR = {"Out": 0.3, "Doubtful": 0.6, "Questionable": 0.9}
+INJURY_FACTOR = {
+    "Out": 0.3,
+    "Doubtful": 0.6,
+    "Questionable": 0.9,
+    "IR": 0.3,
+    "PUP": 0.3,
+    "Sus": 0.3,
+    "NA": 0.3,
+}  # reserve lists read as Out
 DRAFT_PREMIUM = ((3, 0.10), (6, 0.05))  # (through round, premium)
 STUD_WEIGHTS = (1.0, 0.3, 0.15, 0.1)  # a starter isn't sold for three backups
 SELL_HIGH = 1.2  # so far vs projected, per game: a 20% gap is worth saying
@@ -74,7 +85,7 @@ def looks_for_them(lg: League, give: tuple[str, ...], get: tuple[str, ...]) -> f
 
 def grade(mine: float, theirs: float, looks: float) -> str | None:
     """mine / theirs: lineup change a week; looks: looks_for_them."""
-    if mine < MY_MIN_GAIN:
+    if mine < OFFER_MIN_GAIN:
         return None
     even = looks >= -LOOKS_EVEN
     if theirs >= LIKELY_THEIR_GAIN and even:

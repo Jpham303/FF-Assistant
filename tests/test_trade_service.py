@@ -282,3 +282,30 @@ def test_free_agents_the_baseline_picks_up_are_never_trade_chips(trade_league):
                                 fetch=_schedule)  # fmt: skip
     for x in pk["league_wide"]:
         assert "00-F" not in x["give"] and "00-F" not in x["get"]
+
+
+def test_injury_status_comes_from_sleeper_for_players_on_bye_and_reserve_lists(monkeypatch):
+    """Oct 27: what_they_see showed Pierce (IR) and Montgomery (Out, team on bye) with no
+    injury: only this week's projection was read."""
+    from ffa.service import projections
+    from ffa.trade import context, core
+    from ffa.warehouse import duck as duck_mod
+
+    sl = pl.DataFrame({"key": ["mont", "pierce"], "status": ["Out", "Out"],
+                       "designation": ["Out", "IR"]})  # fmt: skip
+    monkeypatch.setattr(projections, "latest_sleeper_status", lambda con, s, w: (sl, None))
+    monkeypatch.setattr(duck_mod, "week", lambda con, ds, s, w: "t")
+
+    class Con:
+        def sql(self, q):
+            class R:
+                @staticmethod
+                def fetchall():  # this week's projection: Pierce on the reserve list,
+                    return [("pierce", None, "RES"), ("q", "Questionable", "ACT")]  # no
+
+            return R()  # Montgomery (bye)
+
+    players = {k: core.Player(k, k, "RB", {}) for k in ("mont", "pierce", "q", "ok")}
+    context._injuries(Con(), SEASON, WEEK, players)
+    got = {k: p.injury for k, p in players.items()}
+    assert got == {"mont": "Out", "pierce": "IR", "q": "Questionable", "ok": None}
