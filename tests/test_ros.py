@@ -133,8 +133,9 @@ def test_weekly_projection_estimates_a_missing_line_and_flags_it():
     from ffa.service.projections import with_lines
 
     rows = []
-    for wk, (h, a, imp_h, imp_a) in enumerate([("AAA", "BBB", 27.0, 20.0), ("BBB", "CCC", 24.0, 21.0),
-                                               ("CCC", "AAA", 19.0, 26.0)], start=1):  # fmt: skip
+    posted_lines = [("AAA", "BBB", 27.0, 20.0), ("BBB", "CCC", 24.0, 21.0),
+                    ("CCC", "AAA", 19.0, 26.0)]  # fmt: skip
+    for wk, (h, a, imp_h, imp_a) in enumerate(posted_lines, start=1):
         for team, opp, home, imp, oimp in ((h, a, True, imp_h, imp_a), (a, h, False, imp_a, imp_h)):
             rows.append({"game_id": f"g{wk}", "season": 2026, "week": wk, "game_type": "REG",
                          "team": team, "opponent": opp, "is_home": home, "implied": imp,
