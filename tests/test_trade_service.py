@@ -148,3 +148,61 @@ def test_a_player_in_your_ir_slot_can_be_traded(trade_league):
     # before = QB 0 + Alpha 14 + Charlie 12 + flex Foxtrot 11 = 37. After: Quinn 18 +
     # Alpha 14 + Charlie 12 + flex Bravo 9 = 53: +16 a week.
     assert r["you"]["per_week"] == 16.0
+
+
+class _Con:
+    """Stands in for the warehouse: returns these game logs for any query."""
+
+    def __init__(self, pg=None, exc=None):
+        self.pg, self.exc = pg, exc
+
+    def sql(self, _q):
+        if self.exc:
+            raise self.exc
+        return self
+
+    def pl(self):
+        return self.pg
+
+
+def test_ranks_season_to_date_and_per_game_rest_of_season():
+    from ffa.scoring.rules import default_rules
+    from ffa.trade import context, core
+
+    pg = pl.DataFrame({"key": ["a", "a", "b", "c"], "position": ["WR"] * 4,
+                       "rec": [5, 5, 4, 1], "rec_yd": [100, 100, 60, 10]})  # fmt: skip
+    players = {
+        # a: best so far; b: fewer points so far but the best per game ahead
+        "a": core.Player("a", "A", "WR", {9: (10.0, 3.0)}, per_game=11.0),
+        "b": core.Player("b", "B", "WR", {9: (9.0, 3.0)}, per_game=15.0),
+        "c": core.Player("c", "C", "WR", {9: (5.0, 3.0)}, per_game=6.0),
+    }
+    assert context._ranks(_Con(pg), default_rules(), SEASON, 9, players) is None
+    assert [players[k].season_rank for k in "abc"] == [1, 2, 3]
+    assert [players[k].ros_rank for k in "abc"] == [2, 1, 3]
+    assert players["a"].season_points == 2 * (5 * 0.5 + 10.0)  # half PPR: 2 games
+
+
+def test_rank_failure_is_reported_not_hidden():
+    from ffa.scoring.rules import default_rules
+    from ffa.trade import context, core
+
+    players = {"a": core.Player("a", "A", "WR", {9: (10.0, 3.0)}, per_game=11.0)}
+    err = context._ranks(_Con(exc=RuntimeError("boom")), default_rules(), SEASON, 9, players)
+    assert err == "RuntimeError: boom" and players["a"].season_rank is None
+    assert players["a"].ros_rank == 1  # projections still rank
+
+
+def test_rest_of_season_drops_this_weeks_row_once_his_game_kicked_off(monkeypatch):
+    from ffa.api import main
+    from ffa.tracking import snapshots
+
+    now = datetime(2026, 10, 26, 20, 0, tzinfo=UTC)  # Monday afternoon
+    ko = pl.DataFrame({"team": ["PHI", "NE"], "kickoff": [
+        datetime(2026, 10, 25, 17, 0, tzinfo=UTC),   # Sunday: played
+        datetime(2026, 10, 27, 0, 15, tzinfo=UTC),   # Monday night: not yet
+    ]})  # fmt: skip
+    monkeypatch.setattr(snapshots, "kickoffs", lambda con, s, w: ko)
+    snap = pl.DataFrame({"team": ["PHI", "PHI", "NE", "NE"], "target_week": [7, 8, 7, 8]})
+    out = main._unplayed(None, snap, SEASON, 7, now=now)
+    assert out.select("team", "target_week").rows() == [("PHI", 8), ("NE", 7), ("NE", 8)]

@@ -11,6 +11,7 @@ from collections.abc import Iterator
 from datetime import datetime
 
 import duckdb
+import polars as pl
 from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -22,6 +23,7 @@ from ffa.db.models import LeagueRow, RosterEntryRow, TeamRow
 from ffa.scoring.rules import ScoringRules, default_rules, from_sleeper
 from ffa.service import availability, fantasy_matchup, gamestate, ros, startsit
 from ffa.service.projections import latest_sleeper_status, upcoming_week
+from ffa.tracking import snapshots
 from ffa.warehouse import duck
 
 app = FastAPI(
@@ -285,6 +287,21 @@ def _rules(row: LeagueRow | None) -> tuple[ScoringRules, str]:
     raise HTTPException(501, f"Scoring for {row.platform} leagues is not supported yet")
 
 
+def _unplayed(con, snap, season: int, week: int, now: datetime | None = None):
+    """Rest-of-season rows without this week's row for players whose game has kicked
+    off: on a Monday the week is still current, but Sunday's games are played, not
+    projected (same rule as my_team and the trade engine)."""
+    if snap.height == 0:
+        return snap
+    try:
+        ko = snapshots.kickoffs(con, season, week)
+    except Exception:  # no kickoff times: keep every row
+        return snap
+    started = [t for t, k in ko.select("team", "kickoff").iter_rows()
+               if gamestate.status(k, now) in gamestate.STARTED]  # fmt: skip
+    return snap.filter(~((pl.col("target_week") == week) & pl.col("team").is_in(started)))
+
+
 # ---------------------------------------------------------------- endpoints
 
 
@@ -356,7 +373,8 @@ def projections(
     ks = [k.strip() for k in keys.split(",") if k.strip()]
     views = startsit.player_views(_views(con, ks, rules, season, w), rules)
     row = _league(db, league)
-    rest = ros.summary(ros.latest(con, season, w), ks, row.id if row is not None else None)
+    rest = ros.summary(_unplayed(con, ros.latest(con, season, w), season, w), ks,
+                       row.id if row is not None else None)  # fmt: skip
     return [Player(**startsit.as_dict(views[k]), rest_of_season=rest.get(k)) for k in ks]
 
 
@@ -448,6 +466,7 @@ def rest_of_season(
             503, "No rest-of-season projections yet: run ros_projections in Dagster "
             "(it runs daily at 5:45 PM CT once availability_horizon has been fitted)",
         )  # fmt: skip
+    snap = _unplayed(con, snap, season, w)
     rest = ros.summary(snap, ks, row.id if row is not None else None)
     first = next(iter(rest.values()), {})
     return {

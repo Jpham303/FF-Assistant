@@ -88,6 +88,11 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    sending an offer is up to the user, in Sleeper.
 13. A player in rest_of_season's not_found has NO projection: say it's missing (a data
    problem to report), never treat him as worth 0 points or compare anyone against him.
+14. Players share last names (Pierce: Alec, IND WR, and Dameon, PHI RB). A last name alone
+   is resolved from context: the team, a teammate named alongside ("Barkley and Pierce"
+   means the PHI back), the position, the user's roster. Look each one up with
+   search_players and check the team before using any number; if context doesn't
+   settle it, ask which one.
 """
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)

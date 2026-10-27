@@ -36,8 +36,9 @@ class Player:
     weekly: dict[int, tuple[float, float]]  # week -> (expected points, sd)
     season_points: float | None = None  # this season so far, league scoring
     season_rank: int | None = None  # positional rank by season_points
-    ros_rank: int | None = None  # positional rank by rest-of-season points
+    ros_rank: int | None = None  # positional rank by per_game
     nfl_team: str | None = None
+    per_game: float | None = None  # projected points per game if active, rest of season
 
     def ros(self, weeks: list[int]) -> float:
         return sum(self.weekly.get(w, (0.0, 0.0))[0] for w in weeks)
@@ -364,7 +365,7 @@ def how_it_looks(lg: League, give: list[str], get: list[str]) -> dict:
             direction = "lower" if p.ros_rank > p.season_rank else "higher"
             out["flags"].append(
                 f"{p.name} is {p.position}{p.season_rank} so far but projects {p.position}"
-                f"{p.ros_rank} the rest of the way ({direction}): his rank may be stale "
+                f"{p.ros_rank} per game the rest of the way ({direction}): his rank may be stale "
                 "(role change or injury)."
             )  # fmt: skip
     return out
@@ -373,7 +374,8 @@ def how_it_looks(lg: League, give: list[str], get: list[str]) -> dict:
 def _card(lg: League, p: Player, side: str) -> dict:
     return {"side": side, "key": p.key, "name": p.name, "position": p.position,
             "season_rank": p.season_rank, "season_points": p.season_points,
-            "ros_rank": p.ros_rank, "ros_points": round(p.ros(lg.weeks), 1)}  # fmt: skip
+            "ros_rank": p.ros_rank, "ros_per_game": p.per_game,
+            "ros_points": round(p.ros(lg.weeks), 1)}  # fmt: skip
 
 
 def _verdict(looks: dict, per_week: float) -> tuple[str, str]:

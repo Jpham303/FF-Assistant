@@ -62,13 +62,19 @@ def build(con, db, row: LeagueRow, rules: ScoringRules, season: int, week: int,
     players: dict[str, core.Player] = {}
     for (key,), g in snap.group_by("key"):
         r0 = g.row(0, named=True)
+        ifa = g.filter(pl.col("target_week").is_in(weeks))["proj_if_active"].drop_nulls() \
+            if "proj_if_active" in g.columns else pl.Series([], dtype=pl.Float64)  # fmt: skip
         players[key] = core.Player(
             key, r0["name"] or key, r0["position"],
             {int(r["target_week"]): (float(r["expected_points"]), float(r["sd"] or 0.0))
-             for r in g.iter_rows(named=True)},
+             for r in g.iter_rows(named=True)},  # every week: this week's partial needs it
             nfl_team=r0.get("team"),
+            per_game=round(float(ifa.mean()), 1) if ifa.len() else None,
         )  # fmt: skip
-    _ranks(con, rules, season, week, players, weeks)
+    rank_error = _ranks(con, rules, season, week, players)
+    if rank_error:
+        notes.append(f"Season-to-date ranks unavailable ({rank_error}); trades are judged "
+                     "on projections only.")  # fmt: skip
 
     teams_rows = list(db.scalars(select(TeamRow).where(TeamRow.league_id == row.id)))
     me = next((t for t in teams_rows if t.is_me), None)
@@ -103,15 +109,19 @@ def build(con, db, row: LeagueRow, rules: ScoringRules, season: int, week: int,
     return ctx
 
 
-def _ranks(con, rules, season: int, week: int, players: dict[str, core.Player],
-           weeks: list[int]) -> None:  # fmt: skip
+def _ranks(con, rules, season: int, week: int,
+           players: dict[str, core.Player]) -> str | None:  # fmt: skip
     """Season-to-date points and positional rank (league scoring), and positional rank by
-    rest-of-season points."""
+    projected points per game if active the rest of the way (byes and missed games left
+    out, so it compares with what managers see). Returns why season-to-date ranks are
+    unavailable, if they are."""
+    error = None
     try:
         pg = con.sql(f"select * from player_games where season = {int(season)} "
                      f"and week < {int(week)}").pl()  # fmt: skip
         pts = score(pg, rules).group_by("key", "position").agg(pl.col("fpts").sum())
-    except Exception:  # no games yet (week 1) or no stats: ranks unavailable
+    except Exception as exc:  # said in the notes, never silently
+        error = f"{type(exc).__name__}: {exc}"[:300]
         pts = pl.DataFrame(schema={"key": pl.Utf8, "position": pl.Utf8, "fpts": pl.Float64})
     pts = pts.with_columns(pl.col("fpts").rank("ordinal", descending=True).over("position")
                            .alias("rk"))  # fmt: skip
@@ -122,8 +132,10 @@ def _ranks(con, rules, season: int, week: int, players: dict[str, core.Player],
     for p in players.values():
         by_pos.setdefault(p.position, []).append(p)
     for ps in by_pos.values():
-        for i, p in enumerate(sorted(ps, key=lambda p: -p.ros(weeks)), 1):
+        ranked = sorted((p for p in ps if p.per_game is not None), key=lambda p: -p.per_game)
+        for i, p in enumerate(ranked, 1):
             p.ros_rank = i
+    return error
 
 
 def _schedule(ctx: Context, row: LeagueRow, teams_rows: list[TeamRow], week: int, pstart: int,
