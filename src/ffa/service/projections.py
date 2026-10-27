@@ -18,6 +18,7 @@ from pathlib import Path
 
 import polars as pl
 
+from ffa.model import ratings
 from ffa.model.inputs import Models, build
 from ffa.model.matchup import MatchupModel
 from ffa.model.player import PlayerModel
@@ -122,6 +123,15 @@ def forced_active(inp, models: Models, n: int, seed: int) -> pl.DataFrame:
     return pl.concat(out, how="diagonal_relaxed") if out else pl.DataFrame()
 
 
+def with_lines(team_games: pl.DataFrame, season: int, week: int) -> pl.DataFrame:
+    """Team games with any line not yet posted for this week on estimated from team
+    ratings fitted on this season's posted lines (the rest-of-season method), flagged
+    `lines_from_ratings`. Oct 27: DAL vs ARI had no line on Tuesday, and both teams were
+    projected for almost no touchdowns."""
+    r = ratings.fit(team_games, season, week)
+    return ratings.fill_lines(team_games, r, season, week)
+
+
 @dataclass
 class RunResult:
     season: int
@@ -137,14 +147,18 @@ def run_week(con, warehouse_dir: str | Path, models: Models, season: int, week: 
     without adding a snapshot to projection_history (the record of what was projected
     at the time), e.g. when regenerating past weeks in the current format."""
     q = lambda t: con.sql(f"select * from {t} where season <= {int(season)}").pl()  # noqa: E731
+    tg = with_lines(q("team_games"), season, week)
     inp = build(
         season=season, week=week, models=models,
-        team_games=q("team_games"), player_games=q("player_games"),
+        team_games=tg, player_games=q("player_games"),
         rosters=con.sql(f"select * from rosters where season = {int(season)}").pl(),
         injuries=con.sql(f"select * from injuries where season = {int(season)}").pl(),
         statuses=_sleeper_status(con, season, week),
     )  # fmt: skip
     check_inputs(inp.players)
+    missing = inp.teams.filter(pl.col("implied").is_null() | pl.col("total_line").is_null())
+    if missing.height:  # never simulate without lines: touchdowns collapse toward 0
+        raise ValueError(f"Week {week}: no lines for {sorted(missing['team'].to_list())}")
     lines = simulate(inp, models.sim, n=n, seed=season * 100 + week)
     forced = forced_active(inp, models, n=ifactive.MIN_ACTIVE * 2, seed=season * 100 + week)
     tag = pl.lit(season).cast(pl.Int32).alias("season"), pl.lit(week).cast(pl.Int32).alias("week")

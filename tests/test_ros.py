@@ -125,3 +125,31 @@ def test_roster_keeps_teams_on_bye_in_the_latest_week():
     out = _roster(r, 2026, 6).sort("key")
     assert out["key"].to_list() == ["A", "T", "W"]
     assert dict(zip(out["key"], out["team"], strict=True)) == {"A": "PHI", "T": "KC", "W": "JAX"}
+
+
+def test_weekly_projection_estimates_a_missing_line_and_flags_it():
+    """Oct 27: DAL vs ARI had no line on Tuesday; with implied totals null, both teams
+    were projected for ~0 touchdowns. Missing lines now come from team ratings."""
+    from ffa.service.projections import with_lines
+
+    rows = []
+    for wk, (h, a, imp_h, imp_a) in enumerate([("AAA", "BBB", 27.0, 20.0), ("BBB", "CCC", 24.0, 21.0),
+                                               ("CCC", "AAA", 19.0, 26.0)], start=1):  # fmt: skip
+        for team, opp, home, imp, oimp in ((h, a, True, imp_h, imp_a), (a, h, False, imp_a, imp_h)):
+            rows.append({"game_id": f"g{wk}", "season": 2026, "week": wk, "game_type": "REG",
+                         "team": team, "opponent": opp, "is_home": home, "implied": imp,
+                         "opp_implied": oimp, "spread_for": imp - oimp,
+                         "total_line": imp + oimp})  # fmt: skip
+    for team, opp, home in (("AAA", "BBB", True), ("BBB", "AAA", False)):  # week 4: no line yet
+        rows.append({"game_id": "g4", "season": 2026, "week": 4, "game_type": "REG",
+                     "team": team, "opponent": opp, "is_home": home, "implied": None,
+                     "opp_implied": None, "spread_for": None, "total_line": None})  # fmt: skip
+    tg = pl.DataFrame(rows)
+    out = with_lines(tg, 2026, 4).filter(pl.col("week") == 4).sort("team")
+    assert out["implied"].is_not_null().all() and out["lines_from_ratings"].all()
+    a, b = out.row(0, named=True), out.row(1, named=True)
+    assert a["implied"] > b["implied"]  # AAA scored more in the posted lines, and is home
+    assert a["total_line"] == pytest.approx(b["total_line"])
+    assert a["spread_for"] == pytest.approx(-b["spread_for"])
+    posted = with_lines(tg, 2026, 1).filter(pl.col("week") == 1)
+    assert not posted["lines_from_ratings"].any()  # posted lines are kept

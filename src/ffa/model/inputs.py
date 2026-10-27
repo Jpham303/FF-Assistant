@@ -62,6 +62,7 @@ def _teams(team_games: pl.DataFrame, models: Models, season: int, week: int) -> 
     outcome_cols = [c for c in tg.columns if c not in (
         "game_id", "season", "week", "game_type", "team", "opponent", "is_home",
         "spread_for", "total_line", "implied", "opp_implied", "roof",
+        "lines_from_ratings",  # known before kickoff, like the lines themselves
     )]  # fmt: skip
     tg = tg.with_columns(
         pl.when(later).then(None).otherwise(pl.col(c)).alias(c) for c in outcome_cols
@@ -84,8 +85,10 @@ def _teams(team_games: pl.DataFrame, models: Models, season: int, week: int) -> 
         pl.col("def_int_mult").alias("opp_def_int_mult"),
         pl.col("def_fum_mult").alias("opp_def_fum_mult"),
     )  # fmt: skip
+    flag = (pl.col("lines_from_ratings").fill_null(False) if "lines_from_ratings" in out.columns
+            else pl.lit(False)).alias("lines_from_ratings")  # fmt: skip
     return out.join(opp, on=["game_id", "opponent"], how="left").select(
-        "game_id", "team", "opponent", "is_home", "spread_for", "total_line", "implied",
+        "game_id", "team", "opponent", "is_home", "spread_for", "total_line", "implied", flag,
         "opp_implied", "mu_plays", "sd_plays", "p_pass", "mu_off_td", "p_pass_td",
         "mu_fg_att", "pace_s", "proe_s", "off_sack_mult", "off_int_mult", "off_fum_mult",
         "def_sack_mult", "def_int_mult", "def_fum_mult", "opp_def_sack_mult",

@@ -372,7 +372,9 @@ def drivers(row: dict, team: dict | None, position: str,
             f"{row['team']} is {line} vs {team['opponent']} (total {team['total_line']:.1f}), "
             f"implied to score {team['implied']:.1f} points; "
             f"projected {team['mu_plays']:.0f} plays, {team['p_pass'] * 100:.0f}% passes"
-        )
+            + (" (no betting line posted yet: spread and total estimated from team ratings "
+               "fitted on this season's lines)" if team.get("lines_from_ratings") else "")
+        )  # fmt: skip
     line = injury_line(row)
     if line:
         out.append(line)
