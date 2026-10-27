@@ -380,3 +380,46 @@ def test_questionable_player_gets_the_check_in_views(warehouse):  # noqa: F811
     v = startsit.player_views(w, default_rules())
     assert v["00-A"].game_day_check.startswith("Questionable:")
     assert v["00-B"].game_day_check is None
+
+
+def test_sleeper_keeps_its_own_designation_and_injury_date_and_old_fetches_still_combine():
+    from datetime import UTC, datetime
+
+    import polars as pl
+
+    from ffa.ingest import status as st
+
+    players = pl.DataFrame({
+        "sleeper_id": ["1"], "gsis_id": ["00-C"], "injury_status": ["PUP"],
+        "injury_body_part": ["Knee - ACL"], "practice_participation": [None],
+        "news_updated": [None], "injury_start_date": ["2026-01-18"],
+    })  # fmt: skip
+    xw = pl.DataFrame({"sleeper_id": ["1"], "gsis_id": ["00-C"]})
+    s = st.sleeper_status(players, xw, datetime(2026, 10, 26, tzinfo=UTC))
+    r = s.row(0, named=True)
+    assert (r["status"], r["designation"], r["injury_since"]) == ("Out", "PUP", "2026-01-18")
+    # A fetch stored before these columns existed still combines (nulls).
+    old = s.drop("designation", "injury_since")
+    nfl = pl.DataFrame(schema={c: t for c, t in st._SCHEMA.items()
+                               if c not in ("designation", "injury_since")})  # fmt: skip
+    out = st.combine(nfl, old)
+    assert out.row(0, named=True)["designation"] is None and out.height == 1
+
+
+def test_an_old_sleeper_injury_note_is_dated_not_presented_as_news():
+    from datetime import UTC, datetime
+
+    from ffa.service.startsit import injury_line, injury_note
+
+    base = {"injury": "Knee - ACL", "injury_source": "Sleeper",
+            "injury_fetched_at": datetime(2026, 10, 26, 22, 5, tzinfo=UTC)}  # fmt: skip
+    assert injury_note(base | {"injury_since": "2026-01-18"}) == (
+        " (knee - acl, from an earlier injury: since Jan 2026)"
+    )
+    assert injury_note(base | {"injury_since": "2026-10-12"}) == " (knee - acl, since Oct 12)"
+    assert injury_note(base | {"designation": "PUP"}) == " (injury on file: knee - acl)"
+    assert injury_note(base | {"designation": "Questionable"}) == " (knee - acl)"
+    assert injury_note({"injury": "Hamstring", "injury_source": "nflverse"}) == " (hamstring)"
+    line = injury_line(base | {"injury_status": "Out", "designation": "PUP", "p_play": 0.0,
+                               "injury_since": "2026-01-18"})  # fmt: skip
+    assert line.startswith("Injury: OUT (PUP list) (knee - acl, from an earlier injury")

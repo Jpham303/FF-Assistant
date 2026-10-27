@@ -64,6 +64,8 @@ def sleeper_status(players: pl.DataFrame, crosswalk: pl.DataFrame,
             "key": r["key"], "status": STATUS.get(r["injury_status"] or ""),
             "practice": practice(r["practice_participation"]), "injury": r["injury_body_part"],
             "source": SOURCE, "updated_at": upd, "fetched_at": fetched_at.astimezone(UTC),
+            "designation": r["injury_status"],  # as Sleeper says it: IR, PUP, Out...
+            "injury_since": (r.get("injury_start_date") or None),
         })  # fmt: skip
     return pl.DataFrame(rows, schema=_SCHEMA) if rows else _empty()
 
@@ -72,7 +74,15 @@ _SCHEMA = {
     "key": pl.Utf8, "status": pl.Utf8, "practice": pl.Utf8, "injury": pl.Utf8,
     "source": pl.Utf8, "updated_at": pl.Datetime("us", "UTC"),
     "fetched_at": pl.Datetime("us", "UTC"),
+    "designation": pl.Utf8,  # the source's own word (Sleeper: IR, PUP, Sus...); status maps it
+    "injury_since": pl.Utf8,  # ISO date the injury on file began, when the source says
 }  # fmt: skip
+
+
+def _conform(df: pl.DataFrame) -> pl.DataFrame:
+    """Every _SCHEMA column (older stored fetches lack the newer ones: null)."""
+    return df.with_columns(pl.lit(None, t).alias(c) for c, t in _SCHEMA.items()
+                           if c not in df.columns).select(list(_SCHEMA)).cast(_SCHEMA)  # fmt: skip
 
 
 def _empty() -> pl.DataFrame:
@@ -88,9 +98,9 @@ def combine(nflverse: pl.DataFrame, sleeper: pl.DataFrame | None) -> pl.DataFram
     one, else Sleeper's. Midweek, Sleeper often already lists a designation with no
     practice note while the official report has practice and no designation yet; taking
     the note with the designation would drop the practice signal."""
-    frames = [nflverse.select(list(_SCHEMA)).cast(_SCHEMA)]  # type: ignore[arg-type]
+    frames = [_conform(nflverse)]
     if sleeper is not None and sleeper.height:
-        frames.append(sleeper.select(list(_SCHEMA)).cast(_SCHEMA))  # type: ignore[arg-type]
+        frames.append(_conform(sleeper))
     allr = pl.concat(frames).with_columns(
         pl.col("status").replace_strict(SEVERITY, default=0).alias("_sev"),
         pl.col("practice").is_not_null().cast(pl.Int8).alias("_prac"),

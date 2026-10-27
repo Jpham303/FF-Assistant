@@ -267,7 +267,7 @@ def build(
     ]
     keep = [
         "key", "name", "team", "opponent", "game_id", "position", "roster_status",
-        "injury_status",
+        "injury_status", "designation", "injury_since",
         "practice", "injury", "injury_source", "injury_updated_at", "injury_fetched_at",
         "prev_out", "prev_status", "prev_week", "final_report", "report_published",
         "season_snap_pct", "m_tgt", "m_catch", "m_ypr", "m_ypc",
@@ -304,6 +304,8 @@ def _statuses(injuries: pl.DataFrame, statuses: pl.DataFrame | None, season: int
         pl.lit("nflverse").alias("source"),
         pl.lit(None, pl.Datetime("us", "UTC")).alias("updated_at"),
         fetched.alias("fetched_at"),
+        pl.col("report_status").replace({"Probable": None, "Note": None}).alias("designation"),
+        pl.lit(None, pl.Utf8).alias("injury_since"),  # this week's official report
     ).filter(pl.col("key").is_not_null())  # fmt: skip
     nfl = nfl.unique("key", keep="last")
     combined = status_src.combine(nfl, statuses)

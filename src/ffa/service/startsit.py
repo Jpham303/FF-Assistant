@@ -267,6 +267,40 @@ def provenance(row: dict) -> str:
     return f"{src}, {'; '.join(parts)}" if parts else src
 
 
+DESIGNATION = {"IR": "injured reserve", "PUP": "PUP list", "Sus": "suspended",
+               "NA": "not with team", "DNR": "did not report", "COV": "COVID list"}  # fmt: skip
+RESERVE_LISTS = {"IR", "PUP", "NA", "Sus", "DNR"}
+EARLIER_INJURY_DAYS = 120  # an injury on file older than this isn't this week's news
+
+
+def injury_note(row: dict) -> str:
+    """The injury on file, honestly dated. The official report's injury is this week's.
+    Sleeper keeps a player's injury note until something replaces it, so its note can be
+    from an earlier injury (Charbonnet's ACL from last season, Oct 27): with a start
+    date it's dated, flagged when old; without one, on a reserve list it's called the
+    injury on file."""
+    text = (row.get("injury") or "").strip().lower()
+    if not text:
+        return ""
+    if row.get("injury_source") != "Sleeper":
+        return f" ({text})"
+    since = row.get("injury_since")
+    ref = row.get("injury_fetched_at") or datetime.now(UTC)
+    try:
+        start = datetime.fromisoformat(str(since)[:10]).replace(tzinfo=UTC) if since else None
+    except ValueError:
+        start = None
+    if start is None:
+        # Undated: a reserve listing (IR, PUP...) is where old notes linger; a weekly
+        # designation's note is almost always this week's.
+        long_term = row.get("designation") in RESERVE_LISTS or row.get("roster_status") == "RES"
+        return f" (injury on file: {text})" if long_term else f" ({text})"
+    age = (ref.replace(tzinfo=ref.tzinfo or UTC) - start).days
+    if age > EARLIER_INJURY_DAYS:
+        return f" ({text}, from an earlier injury: since {start:%b %Y})"
+    return f" ({text}, since {start:%b %d})"
+
+
 def injury_line(row: dict) -> str | None:
     """The injury picture with its source and time, or None for a healthy player."""
     status, practice = row.get("injury_status"), row.get("practice")
@@ -275,11 +309,14 @@ def injury_line(row: dict) -> str | None:
     if roster in ("INA", "RES") and not status:
         what = "On injured reserve" if roster == "RES" else "Inactive this week"
         return f"{what} [team roster, nflverse]; plays in 0% of simulations"
-    injury = f" ({row['injury'].lower()})" if row.get("injury") else ""
+    injury = injury_note(row)
     prev = "; was Out last week" if row.get("prev_out") else ""
     if status:
         prac = f", {PRACTICE_SHORT.get(practice, practice).lower()}" if practice else ""
         head = "OUT" if status == "Out" else status
+        des = row.get("designation")
+        if des and des not in (status, "Out") and status == "Out":
+            head = f"OUT ({DESIGNATION.get(des, des)})"  # Sleeper's own word: IR, PUP...
         return (f"Injury: {head}{injury}{prac}{prev} [{provenance(row)}]; "
                 f"plays in {p * 100:.0f}% of simulations")  # fmt: skip
     if p < 1.0 and not row.get("report_published", True) and row.get("prev_status"):
