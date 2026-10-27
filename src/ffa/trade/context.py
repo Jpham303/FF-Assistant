@@ -16,7 +16,7 @@ from ffa.service import gamestate, ros
 from ffa.tracking import snapshots
 from ffa.trade import core
 
-NON_ROSTER = ("ir", "taxi")
+NON_ROSTER = ("ir", "taxi")  # IR players are added back as Team.ir (tradeable, no roster spot)
 
 
 @dataclass
@@ -82,12 +82,14 @@ def build(con, db, row: LeagueRow, rules: ScoringRules, season: int, week: int,
         ents = list(db.scalars(select(RosterEntryRow).where(RosterEntryRow.team_id == t.id)))
         to_key |= {e.platform_player_id: e.player_key for e in ents if e.player_key}
         keys = [e.player_key for e in ents if e.player_key and e.slot_type not in NON_ROSTER]
+        ir = {e.player_key for e in ents if e.player_key and e.slot_type == "ir"}
         rostered |= {e.player_key for e in ents if e.player_key}
         for e in ents:  # rostered players without a projection still occupy a spot
-            if e.player_key and e.player_key not in players and e.slot_type not in NON_ROSTER:
+            if e.player_key and e.player_key not in players and e.slot_type != "taxi":
                 players[e.player_key] = core.Player(e.player_key, e.name or e.player_key,
                                                     e.position or "?", {})  # fmt: skip
-        teams[t.id] = core.Team(t.id, t.name, keys, limit)
+        teams[t.id] = core.Team(t.id, t.name, keys + sorted(ir), limit, ir,
+                                int(row.ir_slots or 0))  # fmt: skip
     free = [k for k in players if k not in rostered]
     lg = core.League(list(row.lineup_slots), weeks, playoff_weeks, players, free, teams)
     ctx = Context(lg, me.id, {t.id: (t.wins + 0.5 * t.ties, float(t.points_for or 0.0))

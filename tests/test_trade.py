@@ -171,3 +171,32 @@ def test_waiver_baseline_makes_only_the_moves_that_help_and_protects_named_playe
     assert lg.teams["me"].roster == ["QB1", "RB1", "RB2", "RB3", "WR1", "WR2"]  # original kept
     _, moves2 = core.with_waivers(lg, protect=frozenset({"RB3", "WR2"}))
     assert all(m.drop is None or m.drop.key not in ("RB3", "WR2") for m in moves2)
+
+
+def test_ir_players_are_tradeable_and_take_no_roster_spot():
+    lg = _league()
+    me, them = lg.teams["me"], lg.teams["them"]
+    me.ir, me.ir_slots = {"RB3"}, 1  # RB3 sits in your IR slot: 5 players count, 1 open
+    # Them, no IR slot: RB3 lands on their bench. They gave WR6 and got RB3: still 6
+    # counted, no drop, no free agent.
+    r = core.evaluate(lg, "me", "them", give=["RB3"], get=["WR6"])
+    assert not r["them"]["drops"] and not r["them"]["adds"]
+    # You: RB3 leaves IR, WR6 takes the spot that was already open: no drop, and no
+    # free agent either (trading an IR player frees no roster spot).
+    assert not r["you"]["drops"] and not r["you"]["adds"]
+    # Them with an open IR slot: RB3 goes there, so WR6 leaving frees a bench spot and
+    # they add the best free agent.
+    them.ir_slots = 1
+    r = core.evaluate(lg, "me", "them", give=["RB3"], get=["WR6"])
+    assert [a["key"] for a in r["them"]["adds"]] == ["RBBYE"]
+
+
+def test_an_ir_player_returning_counts_in_the_weeks_he_plays():
+    lg = _league()
+    lg.players["RBIR"] = _p("RBIR", "RB", 20, weeks=[10])  # back in week 10 only
+    me = lg.teams["me"]
+    me.roster.append("RBIR")
+    me.ir, me.ir_slots = {"RBIR"}, 1
+    assert me.counted(me.roster) == 6  # still within the limit
+    # Week 10: RBIR (20) starts over RB2 (10), who takes the flex from WR2 (6): +14.
+    assert core.lineup(lg, me.roster, 10)[0] - core.lineup(lg, me.roster, 9)[0] == 14

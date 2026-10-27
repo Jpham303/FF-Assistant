@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ffa.trade.core import League, balance, lineup, value
+from ffa.trade.core import League, after_trade, balance, lineup, value
 
 MAX_SIDE = 4
 CANDIDATES = 6  # per side, per opponent, for the 1-for-1 seed
@@ -77,9 +77,9 @@ def score(lg: League, me: str, partner: str, give: tuple[str, ...], get: tuple[s
     mine, theirs = lg.teams[me], lg.teams[partner]
     taken: set[str] = set()
     out = []
-    for team, gave, got in ((mine, give, get), (theirs, get, give)):
-        after = [k for k in team.roster if k not in gave] + list(got)
-        after, _, _ = balance(lg, team, after, len(got), len(gave), taken, playoff_weighting)
+    for team, gave, got, other in ((mine, give, get, theirs), (theirs, get, give, mine)):
+        after, ir = after_trade(team, gave, got, other)
+        after, _, _ = balance(lg, team, after, ir, taken, playoff_weighting)
         out.append(value(lg, after, playoff_weighting) - value(lg, team.roster, playoff_weighting))
     return out[0], out[1]
 

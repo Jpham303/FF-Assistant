@@ -47,8 +47,15 @@ class Player:
 class Team:
     id: str
     name: str
-    roster: list[str]  # player keys (IR and taxi excluded)
-    size_limit: int
+    roster: list[str]  # player keys, IR included (taxi excluded)
+    size_limit: int  # starters + bench; players in IR slots don't count
+    ir: set[str] = field(default_factory=set)  # in an IR slot now
+    ir_slots: int = 0
+
+    def counted(self, roster: list[str], ir: set[str] | None = None) -> int:
+        """Players taking a roster spot (IR-slot players don't)."""
+        ir = self.ir if ir is None else ir
+        return sum(1 for k in roster if k not in ir)
 
 
 @dataclass
@@ -106,22 +113,37 @@ class Move:
     points: float  # rest-of-season lineup points added (+) or given up (-)
 
 
-def balance(lg: League, team: Team, after: list[str], received: int, gave: int,
+def after_trade(team: Team, gave: tuple[str, ...] | list[str], got: tuple[str, ...] | list[str],
+                giver: Team) -> tuple[list[str], set[str]]:  # fmt: skip
+    """A team's roster and IR slots right after a trade: what it gave leaves (IR slots
+    included); a player who was in the other team's IR slot goes into an open IR slot
+    here, or onto the bench (taking a roster spot) when none is open."""
+    roster = [k for k in team.roster if k not in gave] + list(got)
+    ir = {k for k in team.ir if k not in gave}
+    for k in got:
+        if k in giver.ir and len(ir) < team.ir_slots:
+            ir.add(k)
+    return roster, ir
+
+
+def balance(lg: League, team: Team, after: list[str], ir_after: set[str],
             fa_taken: set[str], playoff_weighting: bool = False,
             ) -> tuple[list[str], list[Move], list[Move]]:  # fmt: skip
     """The roster after the trade made legal: drops (over the limit) or best free agents
-    (into spots the trade freed). Returns (roster, drops, adds)."""
+    (into spots the trade freed). IR-slot players don't take a spot and aren't dropped.
+    Returns (roster, drops, adds)."""
     roster, drops, adds = list(after), [], []
-    limit = max(team.size_limit, len(team.roster))
-    while len(roster) > limit:  # drop whoever costs the lineup least
+    limit = max(team.size_limit, team.counted(team.roster))
+    open_before = limit - team.counted(team.roster)
+    while team.counted(roster, ir_after) > limit:  # drop whoever costs the lineup least
         base = value(lg, roster, playoff_weighting)
         cost = {k: base - value(lg, [x for x in roster if x != k], playoff_weighting)
-                for k in roster}  # fmt: skip
+                for k in roster if k not in ir_after}  # fmt: skip
         k = min(cost, key=cost.get)
         roster.remove(k)
         p = lg.players.get(k)
         drops.append(Move(k, p.name if p else k, p.position if p else "?", -cost[k]))
-    freed = min(gave - received, limit - len(roster))
+    freed = (limit - team.counted(roster, ir_after)) - open_before
     for _ in range(max(freed, 0)):
         base = value(lg, roster, playoff_weighting)
         pool = _fa_candidates(lg, fa_taken)
@@ -175,7 +197,8 @@ def with_waivers(lg: League, playoff_weighting: bool = False, protect: frozenset
     without it. `protect`: players named in the trade, never dropped."""
     pw = playoff_weighting
     n = max(len(lg.weeks), 1)
-    teams = {tid: Team(t.id, t.name, list(t.roster), t.size_limit) for tid, t in lg.teams.items()}
+    teams = {tid: Team(t.id, t.name, list(t.roster), t.size_limit, set(t.ir), t.ir_slots)
+             for tid, t in lg.teams.items()}  # fmt: skip
     out = League(lg.slots, lg.weeks, lg.playoff_weeks, lg.players, list(lg.free_agents), teams)
     moves: list[Waiver] = []
     taken: set[str] = set()
@@ -185,11 +208,11 @@ def with_waivers(lg: League, playoff_weighting: bool = False, protect: frozenset
             roster = team.roster
             base = value(out, roster, pw)
             fas = _fa_candidates(out, taken, WAIVER_FA)
-            if len(roster) < max(team.size_limit, 1):
+            if team.counted(roster) < max(team.size_limit, 1):
                 drops: list[str | None] = [None]
             else:
                 cost = {k: base - value(out, [x for x in roster if x != k], pw)
-                        for k in roster if k not in protect}  # fmt: skip
+                        for k in roster if k not in protect and k not in team.ir}  # fmt: skip
                 drops = sorted(cost, key=cost.get)[:WAIVER_DROPS]
             best, best_gain = None, WAIVER_MIN * n
             for d in drops:
@@ -235,9 +258,9 @@ class Side:
         return self.after - self.before
 
 
-def _side(lg: League, team: Team, before: list[str], after: list[str], received: int,
-          gave: int, fa_taken: set[str], playoff_weighting: bool) -> Side:  # fmt: skip
-    after, drops, adds = balance(lg, team, after, received, gave, fa_taken, playoff_weighting)
+def _side(lg: League, team: Team, before: list[str], after: list[str], ir_after: set[str],
+          fa_taken: set[str], playoff_weighting: bool) -> Side:  # fmt: skip
+    after, drops, adds = balance(lg, team, after, ir_after, fa_taken, playoff_weighting)
     per_week, reasons_pts = {}, {}
     for w in lg.weeks:
         b, _, sb = lineup(lg, before, w)
@@ -277,12 +300,10 @@ def evaluate(lg: League, me: str, partner: str, give: list[str], get: list[str],
     if missing:
         raise ValueError(f"Not on the right roster: {missing}")
     fa_taken: set[str] = set()
-    my_after = [k for k in mine.roster if k not in give] + list(get)
-    their_after = [k for k in theirs.roster if k not in get] + list(give)
-    you = _side(lg, mine, mine.roster, my_after, len(get), len(give), fa_taken,
-                playoff_weighting)  # fmt: skip
-    them = _side(lg, theirs, theirs.roster, their_after, len(give), len(get), fa_taken,
-                 playoff_weighting)  # fmt: skip
+    my_after, my_ir = after_trade(mine, give, get, theirs)
+    their_after, their_ir = after_trade(theirs, get, give, mine)
+    you = _side(lg, mine, mine.roster, my_after, my_ir, fa_taken, playoff_weighting)
+    them = _side(lg, theirs, theirs.roster, their_after, their_ir, fa_taken, playoff_weighting)
     looks = how_it_looks(lg, give, get)
     weeks = max(len(lg.weeks), 1)
     per_week = you.change / weeks

@@ -133,3 +133,18 @@ def test_trade_targets_service_api_and_tool(trade_league, client):  # noqa: F811
         assert "packages" in t and "your_needs" in t
     finally:
         mcp_server.set_client(None)
+
+
+def test_a_player_in_your_ir_slot_can_be_traded(trade_league):
+    """Reported Oct 27: "Not on your roster: Alec Pierce" for a player in the IR slot."""
+    db_, row, wh = trade_league
+    db_.add(RosterEntryRow(team_id="sleeper:1:8", platform_player_id="00-F", player_key="00-F",
+                           name="Foxtrot Wide", position="WR", slot_type="ir"))  # fmt: skip
+    db_.commit()
+    r = service.evaluate_trade(duck.connect(wh), db_, row, from_sleeper(row.scoring), SEASON,
+                               WEEK, give=["00-F"], get=["00-Q"], fetch=_schedule)  # fmt: skip
+    assert r["give"] == ["00-F"] and r["get"] == ["00-Q"]
+    # Your IR-slot players count in your lineup in the weeks they're projected to play:
+    # before = QB 0 + Alpha 14 + Charlie 12 + flex Foxtrot 11 = 37. After: Quinn 18 +
+    # Alpha 14 + Charlie 12 + flex Bravo 9 = 53: +16 a week.
+    assert r["you"]["per_week"] == 16.0
