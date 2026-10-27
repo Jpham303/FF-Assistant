@@ -161,16 +161,28 @@ def test_waiver_baseline_makes_only_the_moves_that_help_and_protects_named_playe
     got = [(m.team, m.add.key, round(m.add.points, 1), m.drop.key if m.drop else None)
            for m in moves]  # fmt: skip
     # You: RBBYE (9 in weeks 8 and 10, bye in 9) takes the flex from WR2 (6) in those two
-    # weeks: +3 +3 = 6, dropping RB3 (5, never starts). Then RBFA (7) beats WR2 (6) at
-    # flex in week 9 only: +1 over 3 weeks = 0.33 a week, just over WAIVER_MIN (0.3).
-    # Them: RB3, just dropped, fills their empty second RB slot: +5 a week = 15,
-    # dropping WR5 (bench). RBFA for anything else adds under 0.3 a week: no more moves.
-    assert got == [("me", "RBBYE", 6.0, "RB3"), ("me", "RBFA", 1.0, "WR2"),
-                   ("them", "RB3", 15.0, "WR5")]  # fmt: skip
-    assert set(out.free_agents) == {"WRFA", "WR2", "WR5"}
+    # weeks: +3 +3 = 6, dropping RB3 (5, never starts; 15 rest of season < RBBYE's 18).
+    # Then RBFA (7) beats WR2 (6) at flex in week 9 only: +1 over 3 weeks = 0.33 a week,
+    # just over WAIVER_MIN (0.3); RBFA's 21 > WR2's 18. Your drops don't return to the
+    # pool (Oct 27: one team's model drop became another's add), so they make no move.
+    assert got == [("me", "RBBYE", 6.0, "RB3"), ("me", "RBFA", 1.0, "WR2")]
+    assert set(out.free_agents) == {"WRFA"}
     assert lg.teams["me"].roster == ["QB1", "RB1", "RB2", "RB3", "WR1", "WR2"]  # original kept
     _, moves2 = core.with_waivers(lg, protect=frozenset({"RB3", "WR2"}))
     assert all(m.drop is None or m.drop.key not in ("RB3", "WR2") for m in moves2)
+
+
+def test_waiver_baseline_never_drops_a_better_player_for_a_lesser_free_agent():
+    lg = _league()
+    lg.players["QB3"] = _p("QB3", "QB", 18)  # a backup: never starts, 54 rest of season
+    lg.players["WRFA2"] = _p("WRFA2", "WR", 7)  # 21: would start at flex over WR2 (6)
+    lg.free_agents = ["WRFA2"]
+    me = lg.teams["me"]
+    me.roster.append("QB3")
+    me.size_limit = 7
+    _, moves = core.with_waivers(lg)
+    # QB3 and RB3 both cost the lineup nothing; only RB3 (15) is outscored by WRFA2 (21).
+    assert [(m.add.key, m.drop.key) for m in moves if m.team == "me"] == [("WRFA2", "RB3")]
 
 
 def test_ir_players_are_tradeable_and_take_no_roster_spot():
@@ -200,3 +212,15 @@ def test_an_ir_player_returning_counts_in_the_weeks_he_plays():
     assert me.counted(me.roster) == 6  # still within the limit
     # Week 10: RBIR (20) starts over RB2 (10), who takes the flex from WR2 (6): +14.
     assert core.lineup(lg, me.roster, 10)[0] - core.lineup(lg, me.roster, 9)[0] == 14
+
+
+def test_across_positions_the_lineup_change_decides_the_verdict():
+    """Oct 27: Aaron Jones for Kirk Cousins gained 2.45 a week but read 'close call'
+    because Cousins projects more raw points."""
+    looks = {"same_position": False, "favors": "them",
+             "basis": "rest-of-season projected points: you get 107.6, give 114.4"}  # fmt: skip
+    verdict, why = core._verdict(looks, 2.45)
+    assert verdict == "accept" and why.startswith("your lineup +2.5 a week")
+    assert "how it looks to them" in why
+    assert core._verdict(looks | {"favors": "you"}, -1.0)[0] == "decline"
+    assert core._verdict(looks, 0.2)[0] == "close call"

@@ -194,6 +194,8 @@ def with_waivers(lg: League, playoff_weighting: bool = False, protect: frozenset
     """The league after every team makes the waiver moves that already help it: add the
     best free agent (into an open spot, or dropping its least valuable player), up to
     WAIVER_MOVES each, teams in `order` (worst record first, like waiver priority). A
+    player is dropped only for a free agent who outscores him the rest of the season,
+    and a dropped player stays out of the pool (no chains of hypothetical moves). A
     trade is then credited only for what it adds beyond moves either manager could make
     without it. `protect`: players named in the trade, never dropped."""
     pw = playoff_weighting
@@ -218,7 +220,12 @@ def with_waivers(lg: League, playoff_weighting: bool = False, protect: frozenset
             best, best_gain = None, WAIVER_MIN * n
             for d in drops:
                 kept = [x for x in roster if x != d]
+                d_ros = lg.players[d].ros(lg.weeks) if d in lg.players else 0.0
                 for f in fas:
+                    # Managers drop a player for a free agent who outscores him the rest
+                    # of the way, not a 10-point-a-game back for a streaming defense.
+                    if d is not None and lg.players[f].ros(lg.weeks) <= d_ros:
+                        continue
                     g = value(out, [*kept, f], pw) - base
                     if g > best_gain:
                         best, best_gain = (d, f), g
@@ -232,8 +239,9 @@ def with_waivers(lg: League, playoff_weighting: bool = False, protect: frozenset
             drop = None
             if d is not None:
                 pd = lg.players.get(d)
+                # Not returned to the pool: no other team is assumed to pick him up
+                # (Oct 27: one team's model drop of Monangai became another's add).
                 drop = Move(d, pd.name if pd else d, pd.position if pd else "?", 0.0)
-                out.free_agents.append(d)
             moves.append(Waiver(tid, add, drop))
     out.free_agents = [k for k in out.free_agents if k not in taken]
     return out, moves
@@ -382,6 +390,17 @@ def _verdict(looks: dict, per_week: float) -> tuple[str, str]:
     fav = looks.get("favors", "even")
     gain = per_week >= CLOSE
     loss = per_week <= -CLOSE
+    if not looks.get("same_position"):
+        # Across positions, your lineup change decides (Oct 27: Jones for Cousins, +2.45
+        # a week, read "close call" because Cousins projects more raw points). Raw
+        # totals are how the trade looks to the other manager, said as context.
+        seen = (f"; on raw {looks.get('basis', 'projected points')} (how it looks to "
+                "them)")  # fmt: skip
+        if gain:
+            return "accept", f"your lineup {per_week:+.1f} a week{seen}"
+        if loss:
+            return "decline", f"your lineup {per_week:+.1f} a week{seen}"
+        return "close call", f"your lineup changes {per_week:+.1f} a week, under {CLOSE}{seen}"
     if fav == "you" and not loss:
         return "accept", f"{looks['basis']}; your lineup {per_week:+.1f} a week"
     if fav == "them" and not gain:
