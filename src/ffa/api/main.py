@@ -38,7 +38,7 @@ app = FastAPI(
 
 # The only warehouse tables the API reads (dims such as player_ids are always available).
 API_DATASETS = (
-    "schedules", "injuries", "team_games", "rosters",
+    "schedules", "injuries", "team_games", "rosters", "player_games",  # player_games: ranks
     "projection_sims", "projection_inputs", "projection_teams",
 )  # fmt: skip
 

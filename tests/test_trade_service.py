@@ -206,3 +206,19 @@ def test_rest_of_season_drops_this_weeks_row_once_his_game_kicked_off(monkeypatc
     snap = pl.DataFrame({"team": ["PHI", "PHI", "NE", "NE"], "target_week": [7, 8, 7, 8]})
     out = main._unplayed(None, snap, SEASON, 7, now=now)
     assert out.select("team", "target_week").rows() == [("PHI", 8), ("NE", 7), ("NE", 8)]
+
+
+def test_ranks_work_through_the_api_connection(warehouse):  # noqa: F811
+    """Oct 27: season_rank was null for everyone because the API opened the warehouse
+    without player_games; the rank step's error was swallowed."""
+    from ffa.api.main import API_DATASETS
+    from ffa.scoring.rules import default_rules
+    from ffa.trade import context, core
+
+    pg = pl.DataFrame({"key": ["a", "b"], "season": [SEASON, SEASON], "week": [1, 1],
+                       "position": ["WR", "WR"], "rec": [5, 2], "rec_yd": [80, 20]})  # fmt: skip
+    store.write(pg, warehouse, "player_games", ingested_at=datetime.now(UTC))
+    con = duck.connect(warehouse, datasets=API_DATASETS)
+    players = {k: core.Player(k, k, "WR", {WEEK: (8.0, 3.0)}, per_game=8.0) for k in "ab"}
+    assert context._ranks(con, default_rules(), SEASON, WEEK, players) is None
+    assert players["a"].season_rank == 1 and players["b"].season_rank == 2
