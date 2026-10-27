@@ -173,8 +173,15 @@ def project(frames: Frames, models: Models, table: dict[str, float], season: int
                     lambda x: horizon.p_play(table, x["position"], x["cat"] or "healthy",
                                              x["role"] or "depth", x["k"] or 1),
                     return_dtype=pl.Float64,
-                ).alias("p_play")
-            ).drop("cat", "role", "k")  # fmt: skip
+                ).alias("_horizon")
+            ).with_columns(
+                # Kickers: the simulation gives all of a team's kicking to its most
+                # likely kicker, so the horizon (fitted on skill players, where a kicker
+                # reads as a "depth" player, ~0.52) would contradict his points. He
+                # keeps this week's chance to play.
+                pl.when(pl.col("position") == "K").then(pl.col("p_play"))
+                .otherwise(pl.col("_horizon")).alias("p_play")
+            ).drop("cat", "role", "k", "_horizon")  # fmt: skip
             inp.players = players
         lines = simulate(inp, models.sim, n=n, seed=seed + season * 100 + w)
         s = _summaries(lines, leagues, w)
@@ -184,8 +191,9 @@ def project(frames: Frames, models: Models, table: dict[str, float], season: int
             "key", "name", "team", "position").unique("key")  # fmt: skip
         filled = tg.filter((pl.col("season") == season) & (pl.col("week") == w)).select(
             "team", pl.col("lines_from_ratings").fill_null(False)).unique("team")  # fmt: skip
-        meta = pl.concat([meta, dst.with_columns(pl.lit(None, pl.Utf8).alias("opponent"),
-                                                 pl.lit(1.0).alias("play_probability"))
+        opp = inp.teams.select("team", "opponent").unique("team")
+        dst = dst.join(opp, on="team", how="left")  # a defense faces its team's opponent
+        meta = pl.concat([meta, dst.with_columns(pl.lit(1.0).alias("play_probability"))
                           .select(meta.columns)], how="vertical_relaxed")  # fmt: skip
         out.append(
             s.join(meta.unique("key"), on="key", how="left").join(filled, on="team", how="left")
