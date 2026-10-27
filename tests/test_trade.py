@@ -232,3 +232,37 @@ def test_across_positions_the_lineup_change_decides_the_verdict():
     assert "how it looks to them" in why
     assert core._verdict(looks | {"favors": "you"}, -1.0)[0] == "decline"
     assert core._verdict(looks, 0.2)[0] == "close call"
+
+
+def test_a_backup_is_worth_the_chance_a_starter_misses():
+    """Oct 27: bench depth was worth 0, so GeumSon 'cut' Lamar Jackson to take a third
+    defense."""
+    lg = _league()
+    me = lg.teams["me"]
+    lg.players["QBB"] = _p("QBB", "QB", 18)  # backup QB
+    me.roster.append("QBB")
+    base = core.lineup(lg, me.roster, 8)[0]  # everyone certain to play: backup adds 0
+    assert base == core.lineup(lg, [k for k in me.roster if k != "QBB"], 8)[0]
+    lg.players["QB1"].play = {8: 0.8}  # starter 80% to play (20 expected, as before)
+    # Week 8: QB1 misses 20% of the time; QBB (18) then plays: +0.2 x 18 = 3.6.
+    assert round(core.lineup(lg, me.roster, 8)[0] - base, 6) == 3.6
+    # Two risky starters, one backup: the riskier gets him (RB1 30% to miss vs RB2 10%).
+    lg.players["QB1"].play = {}
+    lg.players["RB1"].play, lg.players["RB2"].play = {8: 0.7}, {8: 0.9}
+    # RB3 (5) is the bench RB; WR2 (6) is the flex starter: RB3 backs up RB1: 0.3 x 5.
+    # RB2's miss has no backup left: RBs only (QBB can't play RB).
+    assert round(core.lineup(lg, me.roster, 8)[0] - base, 6) == 1.5
+
+
+def test_ties_in_drop_cost_cut_the_player_with_fewer_points():
+    lg = _league()
+    them = lg.teams["them"]
+    lg.players["DEFA"] = _p("DEFA", "DEF", 4)
+    lg.players["QBB"] = _p("QBB", "QB", 15)  # their backup QB: never starts, all play
+    them.roster.append("QBB")
+    them.size_limit = 7
+    # They receive a defense they can't start (no DEF slot). The defense, their backup QB
+    # and WR6 all cost the lineup 0: the cut is the one with the fewest points, WR6 (9),
+    # never the backup QB (45).
+    after, drops, _ = core.balance(lg, them, [*them.roster, "DEFA"], set(), set())
+    assert [d.key for d in drops] == ["WR6"]

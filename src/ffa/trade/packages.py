@@ -98,7 +98,8 @@ class Offer:
 
 
 def generate(lg: League, me: str, *, playoff_weighting: bool = False,
-             partners: list[str] | None = None) -> dict[str, list[Offer]]:  # fmt: skip
+             partners: list[str] | None = None,
+             untradeable: frozenset[str] = frozenset()) -> dict[str, list[Offer]]:  # fmt: skip
     """team -> its best offer in each grade (Likely first), you gaining in every one."""
     n = max(len(lg.weeks), 1)
     out: dict[str, list[Offer]] = {}
@@ -107,7 +108,7 @@ def generate(lg: League, me: str, *, playoff_weighting: bool = False,
             continue
         best: dict[str, Offer] = {}
         for p in team_pool(lg, me, tid, playoff_weighting=playoff_weighting,
-                           max_loss=LONG_SHOT_MAX_LOSS):  # fmt: skip
+                           max_loss=LONG_SHOT_MAX_LOSS, untradeable=untradeable):  # fmt: skip
             mine, theirs = p.mine / n, p.theirs / n
             lk = looks_for_them(lg, p.give, p.get)
             g = grade(mine, theirs, lk)

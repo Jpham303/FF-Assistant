@@ -70,6 +70,9 @@ def build(con, db, row: LeagueRow, rules: ScoringRules, season: int, week: int,
              for r in g.iter_rows(named=True)},  # every week: this week's partial needs it
             nfl_team=r0.get("team"),
             per_game=round(float(ifa.mean()), 1) if ifa.len() else None,
+            play={int(r["target_week"]): float(r["play_probability"])
+                  for r in g.iter_rows(named=True)
+                  if r.get("play_probability") is not None},  # bench insurance
         )  # fmt: skip
     rank_error = _ranks(con, rules, season, week, players)
     if rank_error:

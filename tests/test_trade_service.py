@@ -236,13 +236,13 @@ def test_trade_packages_live_saved_api_and_tool(trade_league, client):  # noqa: 
                                fetch=_schedule)  # fmt: skip
     assert set(r["grades"]) == {"Likely", "Fair", "Stretch", "Long shot"}
     assert [t["team"] for t in r["by_team"]] == ["Theirs"]
-    # By hand: Alpha (RB 14) + Foxtrot (WR 11) for Quinn (QB 18). You, from the waiver
-    # baseline (Foxtrot in your open spot): 0 + 14 + 12 + 11 = 37 -> Quinn 18 + Bravo 9 +
-    # Charlie 12 + Delta 7 = 46: +9 a week. They: Quinn 18 -> Alpha 14 + Foxtrot 11 = 25:
-    # +7. Both gain and it looks fine to them: Likely, listed first.
+    # By hand: Alpha (RB 14) + Charlie (WR 12) for Quinn (QB 18). Foxtrot is the
+    # baseline's pickup for your open spot, so he can't be traded. You: 0 + 14 + 12 + 11
+    # = 37 -> Quinn 18 + Bravo 9 + Foxtrot 11 + Delta 7 = 45: +8 a week. They: Quinn 18 ->
+    # Alpha 14 + Charlie 12 = 26: +8. Both gain, looks fine to them: Likely, first.
     top = r["league_wide"][0]
-    assert (top["grade"], top["give"], top["get"]) == ("Likely", ["00-A", "00-F"], ["00-Q"])
-    assert (top["you_per_week"], top["them_per_week"]) == (9.0, 7.0)
+    assert (top["grade"], top["give"], top["get"]) == ("Likely", ["00-A", "00-C"], ["00-Q"])
+    assert (top["you_per_week"], top["them_per_week"]) == (8.0, 8.0)
     for x in r["league_wide"]:
         assert x["grade"] in r["grades"] and x["you_per_week"] >= 0.1
         assert x["reasons_you"] and x["reasons_them"] and x["what_they_see"]["reads_as"]
@@ -265,3 +265,20 @@ def test_trade_packages_live_saved_api_and_tool(trade_league, client):  # noqa: 
         assert t["marker"] == "saved"
     finally:
         mcp_server.set_client(None)
+
+
+def test_free_agents_the_baseline_picks_up_are_never_trade_chips(trade_league):
+    """Oct 27: the generator offered LV and NO D/ST, which the baseline had 'added' to
+    the user's open roster spots: he doesn't own them."""
+    db_, row, wh = trade_league
+    con = duck.connect(wh)
+    r = service.trade_targets(con, db_, row, from_sleeper(row.scoring), SEASON, WEEK,
+                              fetch=_schedule)  # fmt: skip
+    picked = {m["add"] for m in r["waiver_baseline"]["moves"]}
+    assert picked == {"00-F"}  # Foxtrot goes into your open spot
+    for p in r["packages"]:
+        assert "00-F" not in p["give"]
+    pk = service.trade_packages(con, db_, row, from_sleeper(row.scoring), SEASON, WEEK,
+                                fetch=_schedule)  # fmt: skip
+    for x in pk["league_wide"]:
+        assert "00-F" not in x["give"] and "00-F" not in x["get"]

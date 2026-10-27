@@ -24,7 +24,8 @@ from dataclasses import dataclass, field
 from ffa.trade.core import League, after_trade, balance, lineup, value
 
 MAX_SIDE = 4
-CANDIDATES = 6  # per side, per opponent, for the 1-for-1 seed
+CANDIDATES = 6  # per side, per opponent: players tried when growing a package
+SEEDS = 12  # per side, per opponent: every 1-for-1 among these is scored
 BEAM = 4  # packages per opponent kept at each growth step
 MY_MIN_GAIN = 0.1  # points a week: at least a slight edge
 THEIR_MAX_LOSS = 1.0  # points a week: they can lose this much and still say yes
@@ -90,7 +91,8 @@ def _gain_if_added(lg: League, roster: list[str], k: str, base: float, pw: bool)
 
 def search(lg: League, me: str, *, give: list[str] | None = None,
            position: str | None = None, partners: list[str] | None = None,
-           playoff_weighting: bool = False, top: int = TOP) -> list[Package]:  # fmt: skip
+           playoff_weighting: bool = False, top: int = TOP,
+           untradeable: frozenset[str] = frozenset()) -> list[Package]:  # fmt: skip
     """The best packages across the league (or `partners`), you-first."""
     mine = lg.teams[me]
     fixed = tuple(give or ())
@@ -102,7 +104,7 @@ def search(lg: League, me: str, *, give: list[str] | None = None,
         if tid == me or (partners and tid not in partners):
             continue
         keep = team_pool(lg, me, tid, give=fixed, position=position,
-                         playoff_weighting=playoff_weighting)  # fmt: skip
+                         playoff_weighting=playoff_weighting, untradeable=untradeable)  # fmt: skip
         keep.sort(key=lambda p: (-p.mine, -p.theirs))
         found += _distinct(lg, keep)[: top if partners else PER_OPPONENT]
     found.sort(key=lambda p: (-p.mine, -p.theirs))
@@ -111,10 +113,12 @@ def search(lg: League, me: str, *, give: list[str] | None = None,
 
 def team_pool(lg: League, me: str, tid: str, *, give: tuple[str, ...] = (),
               position: str | None = None, playoff_weighting: bool = False,
-              max_loss: float = THEIR_MAX_LOSS) -> list[Package]:  # fmt: skip
+              max_loss: float = THEIR_MAX_LOSS,
+              untradeable: frozenset[str] = frozenset()) -> list[Package]:  # fmt: skip
     """Every package scored against one team where you gain at least MY_MIN_GAIN a week
     and they lose at most `max_loss` a week (the package generator widens it to find
-    long shots)."""
+    long shots). `untradeable`: players the waiver baseline assumed picked up; they
+    aren't on anyone's roster yet, so they're never offered or asked for."""
     pw = playoff_weighting
     n = max(len(lg.weeks), 1)
     mine, team = lg.teams[me], lg.teams[tid]
@@ -123,18 +127,22 @@ def team_pool(lg: League, me: str, tid: str, *, give: tuple[str, ...] = (),
     their_base = value(lg, team.roster, pw)
     # Players you could get: they'd start for you at least once.
     gets = {k: _gain_if_added(lg, mine.roster, k, my_base, pw) for k in team.roster
-            if position is None or lg.players[k].position == position}  # fmt: skip
+            if k not in untradeable
+            and (position is None or lg.players[k].position == position)}  # fmt: skip
     gets = sorted((k for k, g in gets.items() if g > 0), key=lambda k: -gets[k])
     if not gets:
         return []
     if fixed:
         gives = list(fixed)
     else:
-        gv = {k: _gain_if_added(lg, team.roster, k, their_base, pw) for k in mine.roster}
+        gv = {k: _gain_if_added(lg, team.roster, k, their_base, pw) for k in mine.roster
+              if k not in untradeable}  # fmt: skip
         gives = sorted((k for k, g in gv.items() if g > 0), key=lambda k: -gv[k])
     seeds: list[Package] = []
-    for g in gets[:CANDIDATES]:
-        offers = [fixed] if fixed else [(x,) for x in gives[:CANDIDATES]]
+    # Every 1-for-1 among the SEEDS best on each side (Oct 27: a straight swap that beat
+    # the generator's top package was outside the top 6); only growth uses CANDIDATES.
+    for g in gets[:SEEDS]:
+        offers = [fixed] if fixed else [(x,) for x in gives[:SEEDS]]
         for gv_ in offers:
             m, t = score(lg, me, tid, gv_, (g,), pw)
             if m > 0:

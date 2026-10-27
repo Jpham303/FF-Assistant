@@ -113,7 +113,8 @@ def trade_targets(con, db, row: LeagueRow, rules: ScoringRules, season: int, wee
     waivers = _apply_waivers(ctx, playoff_weighting, frozenset(give))
     lg = ctx.league
     found = search.search(lg, ctx.me, give=give, position=pos, partners=partners,
-                          playoff_weighting=playoff_weighting)  # fmt: skip
+                          playoff_weighting=playoff_weighting,
+                          untradeable=_picked_up(waivers))  # fmt: skip
     needs = search.needs(lg)
     packages = []
     for p in found:
@@ -154,6 +155,12 @@ def _apply_waivers(ctx: context.Context, playoff_weighting: bool,
     return moves
 
 
+def _picked_up(moves: list[core.Waiver]) -> frozenset[str]:
+    """Free agents the baseline assumed picked up: not on anyone's roster, so not trade
+    chips (Oct 27: the generator offered LV and NO D/ST the user doesn't own)."""
+    return frozenset(m.add.key for m in moves)
+
+
 def _waiver_dict(ctx: context.Context, moves: list[core.Waiver], teams: set[str]) -> dict:
     lg = ctx.league
     return {
@@ -192,7 +199,7 @@ def trade_packages(con, db, row: LeagueRow, rules: ScoringRules, season: int, we
     lg = ctx.league
     team_needs = search.needs(lg)
     offers = packages.generate(lg, ctx.me, playoff_weighting=playoff_weighting,
-                               partners=partners)  # fmt: skip
+                               partners=partners, untradeable=_picked_up(waivers))  # fmt: skip
     by_team, flat = [], []
     for tid, offs in offers.items():
         items = []

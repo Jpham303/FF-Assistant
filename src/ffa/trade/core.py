@@ -39,6 +39,7 @@ class Player:
     ros_rank: int | None = None  # positional rank by per_game
     nfl_team: str | None = None
     per_game: float | None = None  # projected points per game if active, rest of season
+    play: dict[int, float] = field(default_factory=dict)  # week -> chance to play (default 1)
     # What managers see (how a trade looks to them): this season in league scoring,
     # where he was drafted in this league, this week's designation.
     games: int = 0
@@ -104,7 +105,36 @@ def lineup(lg: League, keys: list[str], w: int) -> tuple[float, float, list[str 
             starters[i] = best
             total += best_e
             var += lg.players[best].weekly[w][1] ** 2
-    return total, var, starters
+    return total + _insurance(lg, keys, w, starters, used), var, starters
+
+
+def _insurance(lg: League, keys: list[str], w: int, starters: list[str | None],
+               used: set[str]) -> float:  # fmt: skip
+    """What the bench adds: a starter who doesn't play is replaced by the best eligible
+    bench player, so each backup is worth (chance the starter misses) x his expected
+    points. Expected points alone value every backup at 0 (Oct 27: GeumSon 'cut' Lamar
+    Jackson, their backup QB, to take a third defense). Riskiest starter gets first pick
+    of the bench; each backup covers one slot."""
+    misses = []
+    for i, k in enumerate(starters):
+        if k is None:
+            continue
+        miss = 1.0 - lg.players[k].play.get(w, 1.0)
+        if miss > 0:
+            misses.append((miss, i))
+    if not misses:
+        return 0.0
+    backups = {k: lg.players[k].weekly.get(w, (0.0, 0.0))[0] for k in keys
+               if k not in used and k in lg.players}  # fmt: skip
+    out = 0.0
+    for miss, i in sorted(misses, reverse=True):
+        elig = SLOT_ELIGIBILITY.get(lg.slots[i], frozenset())
+        cand = [k for k, e in backups.items() if e > 0 and lg.players[k].position in elig]
+        if not cand:
+            continue
+        b = max(cand, key=backups.get)
+        out += miss * backups.pop(b)
+    return out
 
 
 def value(lg: League, keys: list[str], playoff_weighting: bool = False) -> float:
@@ -135,6 +165,11 @@ def after_trade(team: Team, gave: tuple[str, ...] | list[str], got: tuple[str, .
     return roster, ir
 
 
+def _ros(lg: League, k: str) -> float:
+    p = lg.players.get(k)
+    return p.ros(lg.weeks) if p else 0.0
+
+
 def balance(lg: League, team: Team, after: list[str], ir_after: set[str],
             fa_taken: set[str], playoff_weighting: bool = False,
             ) -> tuple[list[str], list[Move], list[Move]]:  # fmt: skip
@@ -148,7 +183,7 @@ def balance(lg: League, team: Team, after: list[str], ir_after: set[str],
         base = value(lg, roster, playoff_weighting)
         cost = {k: base - value(lg, [x for x in roster if x != k], playoff_weighting)
                 for k in roster if k not in ir_after}  # fmt: skip
-        k = min(cost, key=cost.get)
+        k = min(cost, key=lambda x: (round(cost[x], 6), _ros(lg, x)))  # ties: fewest points
         roster.remove(k)
         p = lg.players.get(k)
         drops.append(Move(k, p.name if p else k, p.position if p else "?", -cost[k]))
@@ -224,7 +259,7 @@ def with_waivers(lg: League, playoff_weighting: bool = False, protect: frozenset
             else:
                 cost = {k: base - value(out, [x for x in roster if x != k], pw)
                         for k in roster if k not in protect and k not in team.ir}  # fmt: skip
-                drops = sorted(cost, key=cost.get)[:WAIVER_DROPS]
+                drops = sorted(cost, key=lambda x: (round(cost[x], 6), _ros(lg, x)))[:WAIVER_DROPS]
             best, best_gain = None, WAIVER_MIN * n
             for d in drops:
                 kept = [x for x in roster if x != d]
