@@ -387,38 +387,16 @@ def _card(lg: League, p: Player, side: str) -> dict:
 
 
 def _verdict(looks: dict, per_week: float) -> tuple[str, str]:
-    fav = looks.get("favors", "even")
-    gain = per_week >= CLOSE
-    loss = per_week <= -CLOSE
-    if not looks.get("same_position"):
-        # Across positions, your lineup change decides (Oct 27: Jones for Cousins, +2.45
-        # a week, read "close call" because Cousins projects more raw points). Raw
-        # totals are how the trade looks to the other manager, said as context.
-        seen = (f"; on raw {looks.get('basis', 'projected points')} (how it looks to "
-                "them)")  # fmt: skip
-        if gain:
-            return "accept", f"your lineup {per_week:+.1f} a week{seen}"
-        if loss:
-            return "decline", f"your lineup {per_week:+.1f} a week{seen}"
-        return "close call", f"your lineup changes {per_week:+.1f} a week, under {CLOSE}{seen}"
-    if fav == "you" and not loss:
-        return "accept", f"{looks['basis']}; your lineup {per_week:+.1f} a week"
-    if fav == "them" and not gain:
-        return "decline", f"{looks['basis']}; your lineup {per_week:+.1f} a week"
-    if fav == "you":  # value says yes, the lineup says no
-        return "close call", (f"{looks['basis']}, but your lineup loses {abs(per_week):.1f} a "
-                              "week (depth or position fit)")  # fmt: skip
-    if fav == "them":  # value says no, the lineup says yes
-        return "close call", (f"{looks['basis']}, but your lineup gains {per_week:.1f} a week "
-                              "(it fills a need)")  # fmt: skip
-    if gain:
-        return (
-            "accept",
-            f"even on {looks.get('basis', 'value')}; your lineup {per_week:+.1f} a week",
-        )
-    if loss:
-        return (
-            "decline",
-            f"even on {looks.get('basis', 'value')}; your lineup {per_week:+.1f} a week",
-        )
-    return "close call", f"even on value and your lineup changes {per_week:+.1f} a week"
+    """Your lineup change decides, at every position (Justin, Oct 27): rank so far and
+    raw projected totals are how the trade looks to the other manager, given as
+    context (acceptance is Phase 4's grades). Same-position trades used to go by
+    season-to-date rank first, which hedged to 'close call' when a stale rank and the
+    lineup disagreed."""
+    seen = f"; {looks.get('basis', 'projected points')} (how it looks to them)"
+    if looks.get("favors") in ("you", "them") and looks.get("same_position"):
+        seen += f", favoring {looks['favors']}"
+    if per_week >= CLOSE:
+        return "accept", f"your lineup {per_week:+.1f} a week{seen}"
+    if per_week <= -CLOSE:
+        return "decline", f"your lineup {per_week:+.1f} a week{seen}"
+    return "close call", f"your lineup changes {per_week:+.1f} a week, under {CLOSE}{seen}"

@@ -72,22 +72,30 @@ def test_playoff_toggle_doubles_playoff_weeks():
     assert on["you"]["ros_change"] == off["you"]["ros_change"] + 5.0  # week 10 counted twice
 
 
-def test_same_position_uses_rank_and_flags_stale_ranks():
+def test_same_position_rank_is_context_and_the_lineup_decides():
     lg = _league()
     lg.players["RB4"].ros_rank = 45  # ranked RB30 so far, projects RB45
     r = core.evaluate(lg, "me", "them", give=["RB2"], get=["RB4"])
     looks = r["how_it_looks"]
     assert looks["same_position"] and looks["favors"] == "them"  # RB30 for your RB24
     assert any("RB30 so far but projects RB45" in f for f in looks["flags"])
-    assert r["verdict"] == "decline"
+    assert r["verdict"] == "decline"  # RB4 (8) for RB2 (10): your lineup -2 a week
+    # The case that changed (Oct 27, option A): a better rank so far (RB5 for your RB24)
+    # used to make this a "close call"; your lineup still loses 2 a week, so: decline.
+    lg.players["RB4"].season_rank = 5
+    r = core.evaluate(lg, "me", "them", give=["RB2"], get=["RB4"])
+    assert r["how_it_looks"]["favors"] == "you" and r["verdict"] == "decline"
+    assert "favoring you" in r["verdict_reason"]
 
 
-def test_cross_position_uses_projected_points_and_disagreement_is_a_close_call():
+def test_cross_position_looks_use_projected_points():
     lg = _league()
     r = core.evaluate(lg, "me", "them", give=["RB1"], get=["WR4"])
     assert not r["how_it_looks"]["same_position"]
     assert r["how_it_looks"]["favors"] == "them"  # 45 vs 33 projected
-    assert r["verdict"] in ("decline", "close call") and 0 <= r["p_ahead"] <= 1
+    # RB1 (15) for WR4 (11): RB2 and RB3 start at RB, WR4 at flex: -15 + 5 + 11 - 6 = -5
+    assert r["verdict"] == "decline" and r["you"]["per_week"] == -5.0
+    assert 0 <= r["p_ahead"] <= 1
 
 
 def test_players_must_be_on_the_right_rosters():
