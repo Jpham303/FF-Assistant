@@ -206,3 +206,23 @@ def test_season_settings_last_fantasy_week():
     two_week_final = {"playoff_week_start": 15, "playoff_teams": 4, "playoff_round_type": 1}
     assert season_settings(two_week_final)["last_week"] == 17
     assert "last_week" not in season_settings({})
+
+
+def test_draft_positions_and_completed_trades_are_kept():
+    lg = json.loads((FIX / "league.json").read_text()) | {"draft_id": "d1"}
+    trade = {"type": "trade", "status": "complete", "transaction_id": "t1",
+             "created": 1761000000000, "adds": {"4046": 2, "6794": 1},
+             "drops": {"4046": 1, "6794": 2}, "roster_ids": [1, 2]}  # fmt: skip
+    over = {
+        f"/v1/league/{LEAGUE}": lg,
+        "/v1/draft/d1/picks": [{"player_id": "4046", "pick_no": 3, "round": 1},
+                               {"player_id": "6794", "pick_no": 30, "round": 3}],
+        f"/v1/league/{LEAGUE}/transactions/2": [
+            trade, {"type": "waiver", "status": "complete", "transaction_id": "w1"},
+            {"type": "trade", "status": "failed", "transaction_id": "t2"}],
+    }  # fmt: skip
+    s = _adapter(me="me_user", overrides=over).fetch_league(LEAGUE).settings
+    assert s["draft_picks"] == {"4046": [3, 1], "6794": [30, 3]}
+    assert [t["id"] for t in s["trades"]] == ["t1"] and s["trades"][0]["week"] == 2
+    assert s["trades"][0]["adds"] == {"4046": "2", "6794": "1"}
+    assert "playoff_week_start" in s  # season settings still there

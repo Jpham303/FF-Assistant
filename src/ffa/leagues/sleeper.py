@@ -148,8 +148,42 @@ class SleeperAdapter:
             scoring={k: float(v) for k, v in (lg.get("scoring_settings") or {}).items()},
             unsupported_slots=unsupported,
             teams=teams,
-            settings=season_settings(settings),
+            settings=season_settings(settings) | self._draft_and_trades(lg),
         )
+
+    def _draft_and_trades(self, lg: dict) -> dict:
+        """Where each player was drafted in this league (how managers value names) and
+        the trades completed so far (to check the trade engine's acceptance grades
+        against). Either may be missing (no draft yet, offseason): never fails a sync."""
+        out: dict = {}
+        try:
+            if lg.get("draft_id"):
+                picks = self.api.get(f"draft/{lg['draft_id']}/picks") or []
+                out["draft_picks"] = {str(p["player_id"]): [int(p["pick_no"]), int(p["round"])]
+                                      for p in picks if p.get("player_id")}  # fmt: skip
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            week = self.current_week()
+            trades = []
+            for w in range(1, week + 1):
+                try:
+                    txs = self.api.get(f"league/{lg['league_id']}/transactions/{w}") or []
+                except Exception:  # noqa: BLE001  (a week with none can 404)
+                    txs = []
+                for t in txs:
+                    if t.get("type") == "trade" and t.get("status") == "complete":
+                        trades.append({
+                            "id": str(t.get("transaction_id")), "week": w,
+                            "created": t.get("created"),
+                            "adds": {str(k): str(v) for k, v in (t.get("adds") or {}).items()},
+                            "drops": {str(k): str(v) for k, v in (t.get("drops") or {}).items()},
+                            "roster_ids": [str(r) for r in t.get("roster_ids") or []],
+                        })  # fmt: skip
+            out["trades"] = trades
+        except Exception:  # noqa: BLE001
+            pass
+        return out
 
     def _team(self, r: dict, owner: dict, lineup: list[str], *, is_me: bool) -> Team:
         starters = r.get("starters") or []

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from ffa.db.models import LeagueRow
 from ffa.scoring.rules import ScoringRules
-from ffa.trade import context, core, playoffs, search
+from ffa.trade import context, core, packages, playoffs, search
 
 
 def _weekly(ctx: context.Context, rosters: dict[str, list[str]]) -> dict:
@@ -168,3 +168,124 @@ def _waiver_dict(ctx: context.Context, moves: list[core.Waiver], teams: set[str]
 
 def _names(lg: core.League, keys: list[str]) -> list[str]:
     return [lg.players[k].name if k in lg.players else k for k in keys]
+
+
+def trade_packages(con, db, row: LeagueRow, rules: ScoringRules, season: int, week: int,
+                   playoff_weighting: bool = False, partner: str | None = None,
+                   now: datetime | None = None, fetch=None) -> dict:  # fmt: skip
+    """The package generator: for every opponent (or `partner`), the best offer in each
+    acceptance grade where you gain, each scored like evaluate_trade, with reasons for
+    both sides and what the other manager sees."""
+    t0 = datetime.now(UTC)
+    ctx = context.build(con, db, row, rules, season, week, now=now, fetch=fetch)
+    lg = ctx.league
+    partners = None
+    if partner:
+        want = partner.lower()
+        match = [t for t in lg.teams.values()
+                 if t.id != ctx.me and want in (t.name.lower(), t.id.lower())]  # fmt: skip
+        if not match:
+            names = sorted(t.name for t in lg.teams.values() if t.id != ctx.me)
+            raise ValueError(f"No team named {partner!r}. Teams: {', '.join(names)}")
+        partners = [match[0].id]
+    waivers = _apply_waivers(ctx, playoff_weighting, frozenset())
+    lg = ctx.league
+    team_needs = search.needs(lg)
+    offers = packages.generate(lg, ctx.me, playoff_weighting=playoff_weighting,
+                               partners=partners)  # fmt: skip
+    by_team, flat = [], []
+    for tid, offs in offers.items():
+        items = []
+        for o in offs:
+            p = o.package
+            res = _evaluate(ctx, tid, list(p.give), list(p.get), playoff_weighting)
+            you, them = packages.reasons(lg, o, res, team_needs[tid])
+            item = {
+                "grade": o.grade, "partner": lg.teams[tid].name,
+                "give": res["give"], "get": res["get"],
+                "you_per_week": round(o.mine, 2), "them_per_week": round(o.theirs, 2),
+                "you_playoff_weeks": res["you"]["playoff_weeks_change"],
+                "reasons_you": you, "reasons_them": them,
+                "what_they_see": _seen(lg, p.give, p.get, o.looks),
+                "shape": p.tags or ["straight swap"],
+                "playoff_odds": res["playoff_odds"],
+                "drops_you": res["you"]["drops"], "adds_you": res["you"]["adds"],
+                "drops_them": res["them"]["drops"], "adds_them": res["them"]["adds"],
+                "verdict": res["verdict"], "p_ahead": res["p_ahead"],
+            }  # fmt: skip
+            items.append(item)
+            flat.append(item)
+        by_team.append({"team": lg.teams[tid].name, "packages": items})
+    order = {g: i for i, g in enumerate(packages.GRADES)}
+    flat.sort(key=lambda x: (order[x["grade"]], -x["you_per_week"]))
+    return {
+        "grades": {
+            "Likely": f"their lineup gains at least {packages.LIKELY_THEIR_GAIN} a week and it "
+                      "looks even or better for them",
+            "Fair": "both lineups gain",
+            "Stretch": f"they lose up to {packages.STRETCH_MAX_LOSS} a week but it looks even "
+                       f"or better for them; you gain at least {packages.STRETCH_MY_GAIN}",
+            "Long shot": f"they lose up to {packages.LONG_SHOT_MAX_LOSS} a week; only what "
+                         "they see (a name, a hot streak) sells it; you gain at least "
+                         f"{packages.LONG_SHOT_MY_GAIN}",
+        },
+        "grade_note": "A scored grade, not a probability: there's no data on offers turned "
+                      "down. Completed trades in the league are logged to check it later.",
+        "by_team": by_team,
+        "league_wide": flat,
+        "waiver_baseline": _waiver_dict(ctx, waivers, {ctx.me}),
+        "weeks": lg.weeks, "scoring": ctx.scoring, "as_of": ctx.as_of, "notes": ctx.notes,
+        "generated_at": t0.isoformat(),
+        "seconds": round((datetime.now(UTC) - t0).total_seconds(), 1),
+    }  # fmt: skip
+
+
+def _seen(lg: core.League, give, get, looks: float) -> dict:
+    """What the other manager sees, per player, and the verdict on it."""
+
+    def card(k: str) -> dict:
+        p = lg.players[k]
+        return {"name": p.name, "position": p.position, "ppg_so_far": p.ppg,
+                "last3": p.last3, "season_rank": p.season_rank, "draft_pick": p.draft_pick,
+                "injury": p.injury,
+                "perceived_per_game": round(packages.perceived(p), 1)}  # fmt: skip
+
+    return {"they_get": [card(k) for k in give], "they_give": [card(k) for k in get],
+            "looks_for_them": round(looks, 2),
+            "reads_as": "better for them" if looks > packages.LOOKS_EVEN
+            else "even" if looks >= -packages.LOOKS_EVEN else "worse for them"}  # fmt: skip
+
+
+DATASET = "trade_packages"  # precomputed daily after rest of season
+
+
+def save_all(warehouse_dir, season: int, week: int, payloads: dict[str, dict],
+             now: datetime | None = None) -> None:  # fmt: skip
+    """Every league's run in one write (a week's latest write is what's read back)."""
+    import json
+
+    import polars as pl
+
+    from ffa.warehouse import store
+
+    texts = [json.dumps(p, default=str) for p in payloads.values()]
+    df = pl.DataFrame({"league": list(payloads), "season": [season] * len(payloads),
+                       "week": [week] * len(payloads), "payload": texts})  # fmt: skip
+    store.write(df, warehouse_dir, DATASET, volatile=True, ingested_at=now or datetime.now(UTC))
+
+
+def saved_packages(con, league_id: str, season: int, week: int) -> dict | None:
+    """The latest precomputed run for this league and week, or None."""
+    import json
+
+    from ffa.warehouse import duck
+
+    try:
+        t = duck.week(con, DATASET, season, week)
+    except duck.MissingPartition:
+        return None
+    rows = con.sql(f"select payload, _ingested_at from {t} where league = ? "
+                   "order by _ingested_at desc limit 1", params=[league_id]).fetchall()  # fmt: skip
+    if not rows:
+        return None
+    return json.loads(rows[0][0]) | {"precomputed_at": str(rows[0][1])}

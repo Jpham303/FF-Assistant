@@ -81,12 +81,18 @@ def build(con, db, row: LeagueRow, rules: ScoringRules, season: int, week: int,
     if me is None:
         raise LookupError("Your team isn't identified in this league; sync with --me")
     limit = len(row.lineup_slots) + int(row.bench_slots or 0)
+    draft = (row.settings or {}).get("draft_picks") or {}
+    _injuries(con, season, week, players)
     rostered: set[str] = set()
     teams = {}
     to_key: dict[str, str] = {}
     for t in teams_rows:
         ents = list(db.scalars(select(RosterEntryRow).where(RosterEntryRow.team_id == t.id)))
         to_key |= {e.platform_player_id: e.player_key for e in ents if e.player_key}
+        for e in ents:  # where he was drafted in this league
+            pick = draft.get(str(e.platform_player_id))
+            if pick and e.player_key in players:
+                players[e.player_key].draft_pick, players[e.player_key].draft_round = pick
         keys = [e.player_key for e in ents if e.player_key and e.slot_type not in NON_ROSTER]
         ir = {e.player_key for e in ents if e.player_key and e.slot_type == "ir"}
         rostered |= {e.player_key for e in ents if e.player_key}
@@ -109,6 +115,20 @@ def build(con, db, row: LeagueRow, rules: ScoringRules, season: int, week: int,
     return ctx
 
 
+def _injuries(con, season: int, week: int, players: dict[str, core.Player]) -> None:
+    """This week's designation from the latest weekly projection (what managers see)."""
+    from ffa.warehouse import duck
+
+    try:
+        t = duck.week(con, "projection_inputs", season, week)
+        rows = con.sql(f"select key, injury_status from {t}").fetchall()
+    except Exception:  # noqa: BLE001  (no projection yet: no statuses)
+        return
+    for k, st in rows:
+        if k in players and st:
+            players[k].injury = st
+
+
 def _ranks(con, rules, season: int, week: int,
            players: dict[str, core.Player]) -> str | None:  # fmt: skip
     """Season-to-date points and positional rank (league scoring), and positional rank by
@@ -119,7 +139,21 @@ def _ranks(con, rules, season: int, week: int,
     try:
         pg = con.sql(f"select * from player_games where season = {int(season)} "
                      f"and week < {int(week)}").pl()  # fmt: skip
-        pts = score(pg, rules).group_by("key", "position").agg(pl.col("fpts").sum())
+        played = (pl.col("played").fill_null(False) if "played" in pg.columns
+                  else pl.col("snaps").fill_null(0) > 0 if "snaps" in pg.columns
+                  else pl.lit(True))  # fmt: skip
+        wk = pl.col("week") if "week" in pg.columns else pl.lit(0)
+        pg = pg.with_columns(played.alias("_played"), wk.alias("_wk"))
+        scored = score(pg, rules)
+        pts = scored.group_by("key", "position").agg(pl.col("fpts").sum())
+        games = scored.filter(pl.col("_played")).sort("_wk").group_by("key").agg(
+            pl.len().alias("gp"), pl.col("fpts").mean().alias("ppg"),
+            pl.col("fpts").tail(3).mean().alias("last3"),
+        )  # fmt: skip
+        for k, gp, ppg, last3 in games.iter_rows():
+            if k in players:
+                players[k].games, players[k].ppg = int(gp), round(float(ppg), 1)
+                players[k].last3 = round(float(last3), 1)
     except Exception as exc:  # said in the notes, never silently
         error = f"{type(exc).__name__}: {exc}"[:300]
         pts = pl.DataFrame(schema={"key": pl.Utf8, "position": pl.Utf8, "fpts": pl.Float64})

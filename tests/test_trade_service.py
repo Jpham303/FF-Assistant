@@ -225,3 +225,43 @@ def test_ranks_work_through_the_api_connection(warehouse):  # noqa: F811
     players = {k: core.Player(k, k, "WR", {WEEK: (8.0, 3.0)}, per_game=8.0) for k in "ab"}
     assert context._ranks(con, default_rules(), SEASON, WEEK, players) is None
     assert players["a"].season_rank == 1 and players["b"].season_rank == 2
+
+
+def test_trade_packages_live_saved_api_and_tool(trade_league, client):  # noqa: F811
+    from ffa import mcp_server
+
+    db_, row, wh = trade_league
+    con = duck.connect(wh)
+    r = service.trade_packages(con, db_, row, from_sleeper(row.scoring), SEASON, WEEK,
+                               fetch=_schedule)  # fmt: skip
+    assert set(r["grades"]) == {"Likely", "Fair", "Stretch", "Long shot"}
+    assert [t["team"] for t in r["by_team"]] == ["Theirs"]
+    # By hand: Alpha (RB 14) + Foxtrot (WR 11) for Quinn (QB 18). You, from the waiver
+    # baseline (Foxtrot in your open spot): 0 + 14 + 12 + 11 = 37 -> Quinn 18 + Bravo 9 +
+    # Charlie 12 + Delta 7 = 46: +9 a week. They: Quinn 18 -> Alpha 14 + Foxtrot 11 = 25:
+    # +7. Both gain and it looks fine to them: Likely, listed first.
+    top = r["league_wide"][0]
+    assert (top["grade"], top["give"], top["get"]) == ("Likely", ["00-A", "00-F"], ["00-Q"])
+    assert (top["you_per_week"], top["them_per_week"]) == (9.0, 7.0)
+    for x in r["league_wide"]:
+        assert x["grade"] in r["grades"] and x["you_per_week"] >= 0.1
+        assert x["reasons_you"] and x["reasons_them"] and x["what_they_see"]["reads_as"]
+    # Precomputed: what the API serves without refresh.
+    service.save_all(wh, SEASON, WEEK, {row.id: r | {"marker": "saved"}})
+    got = client.get("/trade/packages", params={"league": row.id}).json()
+    assert got["marker"] == "saved" and "precomputed_at" in got
+    live = client.get("/trade/packages", params={"league": row.id, "refresh": True}).json()
+    assert "marker" not in live and live["by_team"][0]["team"] == "Theirs"
+    one = client.get("/trade/packages", params={"league": row.id, "partner": "theirs"}).json()
+    assert [t["team"] for t in one["by_team"]] == ["Theirs"]
+    bad = client.get("/trade/packages", params={"league": row.id, "partner": "Nobody",
+                                                "refresh": True})  # fmt: skip
+    assert bad.status_code == 422 and "Theirs" in bad.text
+    mcp_server.set_client(client)
+    try:
+        from tests.test_mcp import call
+
+        t = call("trade_packages", league=row.id)
+        assert t["marker"] == "saved"
+    finally:
+        mcp_server.set_client(None)

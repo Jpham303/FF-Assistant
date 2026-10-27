@@ -93,6 +93,11 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    means the PHI back), the position, the user's roster. Look each one up with
    search_players and check the team before using any number; if context doesn't
    settle it, ask which one.
+15. "What trades should I offer", "any trades out there", "who would take X": call
+   trade_packages. Lead with league_wide's Likely and Fair offers, then the best Stretch
+   and Long shot. For each: what the user gives and gets, his gain a week and theirs,
+   the grade and why (their lineup change and how it looks to them: reads_as), the
+   reasons for both sides, playoff odds. Grades are a scored judgment, not a probability.
 """
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
@@ -314,6 +319,25 @@ def trade_targets(give: list[str] | None = None, position: str | None = None,
         if league:
             body["league"] = league
         return _call("POST", "/trade/targets", json=body)
+    except ApiError as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(annotations=READ_ONLY)
+def trade_packages(partner: str | None = None, refresh: bool = False,
+                   league: str | None = None, playoff_weighting: bool = False) -> dict:  # fmt: skip
+    """Trade offers to make: for every opponent in the user's league (or one `partner`
+    team), the best offer in each acceptance grade (Likely, Fair, Stretch, Long shot)
+    where the user gains, with both lineups' change per week, playoff odds, reasons for
+    both sides (with numbers) and what the other manager sees (points per game so far,
+    last 3 games, draft pick, injury). league_wide lists them all, Likely first, by the
+    user's gain. Precomputed daily; refresh=true recomputes (can take a minute or two).
+    Read-only: never proposes anything."""
+    try:
+        params = {"refresh": refresh, "playoff_weighting": playoff_weighting}
+        params |= {"partner": partner} if partner else {}
+        params |= {"league": league} if league else {}
+        return _call("GET", "/trade/packages", params=params)
     except ApiError as e:
         return {"error": str(e)}
 

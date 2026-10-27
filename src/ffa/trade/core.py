@@ -39,6 +39,14 @@ class Player:
     ros_rank: int | None = None  # positional rank by per_game
     nfl_team: str | None = None
     per_game: float | None = None  # projected points per game if active, rest of season
+    # What managers see (how a trade looks to them): this season in league scoring,
+    # where he was drafted in this league, this week's designation.
+    games: int = 0
+    ppg: float | None = None
+    last3: float | None = None
+    draft_pick: int | None = None
+    draft_round: int | None = None
+    injury: str | None = None
 
     def ros(self, weeks: list[int]) -> float:
         return sum(self.weekly.get(w, (0.0, 0.0))[0] for w in weeks)

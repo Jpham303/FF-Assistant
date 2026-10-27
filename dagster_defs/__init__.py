@@ -615,7 +615,43 @@ def ros_projections(context: AssetExecutionContext) -> MaterializeResult:
     })  # fmt: skip
 
 
-ros_job = define_asset_job("ros_refresh", selection=AssetSelection.assets("ros_projections"),
+@asset(group_name="projections", deps=["ros_projections"])
+@dumps_on_hang
+def trade_packages(context: AssetExecutionContext) -> MaterializeResult:
+    """The trade package generator for every synced Sleeper league where your team is
+    identified, precomputed so it opens instantly (GET /trade/packages)."""
+    from sqlalchemy import select
+
+    from ffa.db.models import LeagueRow, TeamRow
+    from ffa.scoring.rules import from_sleeper
+    from ffa.trade import service as trade_service
+
+    con = duck.connect(settings.warehouse_dir)
+    season = settings.current_season
+    week = projections_mod.upcoming_week(con, season)
+    if week is None:
+        return MaterializeResult(metadata={"week": "none"})
+    out, meta = {}, {}
+    with db_session() as db:
+        for row in db.scalars(select(LeagueRow).where(LeagueRow.platform == "sleeper")):
+            if not db.scalar(select(TeamRow).where(TeamRow.league_id == row.id, TeamRow.is_me)):
+                continue
+            try:
+                res = trade_service.trade_packages(con, db, row, from_sleeper(row.scoring),
+                                                   season, week)  # fmt: skip
+            except Exception as exc:  # one league failing shouldn't stop the others
+                context.log.warning(f"{row.name}: {exc}")
+                continue
+            out[row.id] = res
+            meta[row.name] = f"{len(res['league_wide'])} packages, {res['seconds']} s"
+            context.log.info(f"{row.name}: {meta[row.name]}")
+    if out:  # one write for every league: the latest write is what's read
+        trade_service.save_all(settings.warehouse_dir, season, week, out)
+    return MaterializeResult(metadata={"week": week, **meta})
+
+
+ros_job = define_asset_job("ros_refresh",
+                           selection=AssetSelection.assets("ros_projections", "trade_packages"),
                            tags=HEAVY | _limit(45))  # fmt: skip
 
 
@@ -858,6 +894,7 @@ defs = Definitions(
         weekly_projections,
         availability_horizon,
         ros_projections,
+        trade_packages,
         sleeper_benchmark,
         actuals,
         eval_results,

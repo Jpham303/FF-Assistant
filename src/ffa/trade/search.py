@@ -92,66 +92,78 @@ def search(lg: League, me: str, *, give: list[str] | None = None,
            position: str | None = None, partners: list[str] | None = None,
            playoff_weighting: bool = False, top: int = TOP) -> list[Package]:  # fmt: skip
     """The best packages across the league (or `partners`), you-first."""
-    pw = playoff_weighting
-    n = max(len(lg.weeks), 1)
     mine = lg.teams[me]
     fixed = tuple(give or ())
     bad = [k for k in fixed if k not in mine.roster]
     if bad:
         raise ValueError(f"Not on your roster: {bad}")
-    my_base = value(lg, mine.roster, pw)
     found: list[Package] = []
-    for tid, team in lg.teams.items():
+    for tid in lg.teams:
         if tid == me or (partners and tid not in partners):
             continue
-        their_base = value(lg, team.roster, pw)
-        # Players you could get: they'd start for you at least once.
-        gets = {k: _gain_if_added(lg, mine.roster, k, my_base, pw) for k in team.roster
-                if position is None or lg.players[k].position == position}  # fmt: skip
-        gets = sorted((k for k, g in gets.items() if g > 0), key=lambda k: -gets[k])
-        if not gets:
-            continue
-        if fixed:
-            gives = list(fixed)
-        else:
-            gv = {k: _gain_if_added(lg, team.roster, k, their_base, pw) for k in mine.roster}
-            gives = sorted((k for k, g in gv.items() if g > 0), key=lambda k: -gv[k])
-        seeds: list[Package] = []
-        for g in gets[:CANDIDATES]:
-            offers = [fixed] if fixed else [(x,) for x in gives[:CANDIDATES]]
-            for gv_ in offers:
-                m, t = score(lg, me, tid, gv_, (g,), pw)
-                if m > 0:
-                    seeds.append(Package(tid, gv_, (g,), m, t))
-        pool = {p.key(): p for p in seeds}
-        beam = _best(seeds, n)
-        # Grow: one more player on either side while it helps both (sweetener /
-        # consolidation). Named offers stay fixed on your side.
-        for _ in range(2 * (MAX_SIDE - 1)):
-            grown: list[Package] = []
-            for p in beam:
-                adds_give = [] if fixed else [k for k in gives if k not in p.give]
-                adds_get = [k for k in gets[:CANDIDATES] if k not in p.get]
-                for k in adds_give[:CANDIDATES] if len(p.give) < MAX_SIDE else []:
-                    q = _try(lg, me, tid, p.give + (k,), p.get, pw, pool)
-                    if q and q.theirs > p.theirs and q.mine > 0:
-                        q.tags = sorted({*p.tags, "sweetener"})
-                        grown.append(q)
-                for k in adds_get if len(p.get) < MAX_SIDE else []:
-                    q = _try(lg, me, tid, p.give, p.get + (k,), pw, pool)
-                    if q and q.mine > p.mine and q.theirs >= min(p.theirs, -THEIR_MAX_LOSS * n):
-                        q.tags = sorted({*p.tags, "consolidation" if len(q.get) > len(q.give)
-                                         else "adds a player"})  # fmt: skip
-                        grown.append(q)
-            if not grown:
-                break
-            beam = _best(grown, n)
-        keep = [p for p in pool.values()
-                if p.mine >= MY_MIN_GAIN * n and p.theirs >= -THEIR_MAX_LOSS * n]  # fmt: skip
+        keep = team_pool(lg, me, tid, give=fixed, position=position,
+                         playoff_weighting=playoff_weighting)  # fmt: skip
         keep.sort(key=lambda p: (-p.mine, -p.theirs))
         found += _distinct(lg, keep)[: top if partners else PER_OPPONENT]
     found.sort(key=lambda p: (-p.mine, -p.theirs))
     return found[:top]
+
+
+def team_pool(lg: League, me: str, tid: str, *, give: tuple[str, ...] = (),
+              position: str | None = None, playoff_weighting: bool = False,
+              max_loss: float = THEIR_MAX_LOSS) -> list[Package]:  # fmt: skip
+    """Every package scored against one team where you gain at least MY_MIN_GAIN a week
+    and they lose at most `max_loss` a week (the package generator widens it to find
+    long shots)."""
+    pw = playoff_weighting
+    n = max(len(lg.weeks), 1)
+    mine, team = lg.teams[me], lg.teams[tid]
+    fixed = tuple(give)
+    my_base = value(lg, mine.roster, pw)
+    their_base = value(lg, team.roster, pw)
+    # Players you could get: they'd start for you at least once.
+    gets = {k: _gain_if_added(lg, mine.roster, k, my_base, pw) for k in team.roster
+            if position is None or lg.players[k].position == position}  # fmt: skip
+    gets = sorted((k for k, g in gets.items() if g > 0), key=lambda k: -gets[k])
+    if not gets:
+        return []
+    if fixed:
+        gives = list(fixed)
+    else:
+        gv = {k: _gain_if_added(lg, team.roster, k, their_base, pw) for k in mine.roster}
+        gives = sorted((k for k, g in gv.items() if g > 0), key=lambda k: -gv[k])
+    seeds: list[Package] = []
+    for g in gets[:CANDIDATES]:
+        offers = [fixed] if fixed else [(x,) for x in gives[:CANDIDATES]]
+        for gv_ in offers:
+            m, t = score(lg, me, tid, gv_, (g,), pw)
+            if m > 0:
+                seeds.append(Package(tid, gv_, (g,), m, t))
+    pool = {p.key(): p for p in seeds}
+    beam = _best(seeds, n, max_loss)
+    # Grow: one more player on either side while it helps both (sweetener /
+    # consolidation). Named offers stay fixed on your side.
+    for _ in range(2 * (MAX_SIDE - 1)):
+        grown: list[Package] = []
+        for p in beam:
+            adds_give = [] if fixed else [k for k in gives if k not in p.give]
+            adds_get = [k for k in gets[:CANDIDATES] if k not in p.get]
+            for k in adds_give[:CANDIDATES] if len(p.give) < MAX_SIDE else []:
+                q = _try(lg, me, tid, p.give + (k,), p.get, pw, pool)
+                if q and q.theirs > p.theirs and q.mine > 0:
+                    q.tags = sorted({*p.tags, "sweetener"})
+                    grown.append(q)
+            for k in adds_get if len(p.get) < MAX_SIDE else []:
+                q = _try(lg, me, tid, p.give, p.get + (k,), pw, pool)
+                if q and q.mine > p.mine and q.theirs >= min(p.theirs, -max_loss * n):
+                    q.tags = sorted({*p.tags, "consolidation" if len(q.get) > len(q.give)
+                                     else "adds a player"})  # fmt: skip
+                    grown.append(q)
+        if not grown:
+            break
+        beam = _best(grown, n, max_loss)
+    return [p for p in pool.values()
+            if p.mine >= MY_MIN_GAIN * n and p.theirs >= -max_loss * n]  # fmt: skip
 
 
 def _try(lg, me, tid, give, get, pw, pool) -> Package | None:
@@ -163,10 +175,10 @@ def _try(lg, me, tid, give, get, pw, pool) -> Package | None:
     return p
 
 
-def _best(ps: list[Package], n: int) -> list[Package]:
+def _best(ps: list[Package], n: int, max_loss: float = THEIR_MAX_LOSS) -> list[Package]:
     """The packages most worth growing: you gain, and the least painful for them."""
     ok = [p for p in ps if p.mine > 0]
-    ok.sort(key=lambda p: -(min(p.mine, p.theirs + THEIR_MAX_LOSS * n) + 0.1 * p.mine))
+    ok.sort(key=lambda p: -(min(p.mine, p.theirs + max_loss * n) + 0.1 * p.mine))
     return ok[:BEAM]
 
 
