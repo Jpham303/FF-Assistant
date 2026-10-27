@@ -309,3 +309,41 @@ def saved_packages(con, league_id: str, season: int, week: int) -> dict | None:
     if not rows:
         return None
     return json.loads(rows[0][0]) | {"precomputed_at": str(rows[0][1])}
+
+
+COMPACT_TOP = 12
+
+
+def compact(payload: dict, top: int | None = COMPACT_TOP) -> dict:
+    """A short form for chat clients (Oct 27: the full run was 220K characters and got
+    cut off): the best `top` offers league-wide, each with what's needed to decide (the
+    trade, both sides' change, the grade and its parts, 2 reasons a side, your playoff
+    odds), and no per-team copy."""
+
+    def short(x: dict) -> dict:
+        odds = x.get("playoff_odds") or {}
+        you = odds.get("you") or {}
+        return {
+            "grade": x["grade"], "grade_note": x.get("grade_note"),
+            "partner": x["partner"], "give": x["give"], "get": x["get"],
+            "you_per_week": x["you_per_week"], "them_per_week": x["them_per_week"],
+            "acceptance": x.get("acceptance"),
+            "reads_as": (x.get("what_they_see") or {}).get("reads_as"),
+            "reasons_you": x["reasons_you"][:2], "reasons_them": x["reasons_them"][:2],
+            "your_playoff_odds": [you.get("before"), you.get("after")] if you else None,
+            "shape": x.get("shape"),
+            "cuts_them": [d["name"] for d in x.get("drops_them", [])],
+            "drops_you": [d["name"] for d in x.get("drops_you", [])],
+            "adds": [a["name"] for a in x.get("adds_you", [])],
+            "skipped_pickups_you": [d["name"] for d in x.get("skipped_pickups_you", [])],
+        }  # fmt: skip
+
+    flat = payload.get("league_wide", [])
+    keep = flat[:top] if top else flat
+    out = {k: v for k, v in payload.items() if k not in ("by_team", "league_wide")}
+    return out | {
+        "league_wide": [short(x) for x in keep],
+        "shown": f"{len(keep)} of {len(flat)} offers (Likely first, by your gain); "
+                 "compact=false for every field, top=N for more",
+        "teams_with_offers": sorted({x["partner"] for x in flat}),
+    }  # fmt: skip

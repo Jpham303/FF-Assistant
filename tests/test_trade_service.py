@@ -242,7 +242,8 @@ def test_trade_packages_live_saved_api_and_tool(trade_league, client):  # noqa: 
     # Alpha 14 + Delta 7 = 21: +3. How it looks to them: 0.3 x ((14 + 0.3 x 7) - 18) =
     # -0.57; no cuts; score 2.43 >= 1.0: Likely, the best for you in that grade.
     top = r["league_wide"][0]
-    assert (top["grade"], top["give"], top["get"]) == ("Likely", ["00-A", "00-D"], ["00-Q"])
+    assert (top["grade"], sorted(top["give"]), top["get"]) == ("Likely", ["00-A", "00-D"],
+                                                              ["00-Q"])  # fmt: skip
     assert (top["you_per_week"], top["them_per_week"]) == (13.0, 3.0)
     assert top["acceptance"]["score"] == 2.43 and top["acceptance"]["how_it_looks"] == -0.57
     for x in r["league_wide"]:
@@ -316,3 +317,16 @@ def test_injury_status_comes_from_sleeper_for_players_on_bye_and_reserve_lists(m
     context._injuries(Con(), SEASON, WEEK, players)
     got = {k: p.injury for k, p in players.items()}
     assert got == {"mont": "Out", "pierce": "IR", "q": "Questionable", "ok": None}
+
+
+def test_compact_output_is_short_and_keeps_what_decides(trade_league, client):  # noqa: F811
+    db_, row, wh = trade_league
+    full = client.get("/trade/packages", params={"league": row.id, "refresh": True}).json()
+    c = client.get("/trade/packages", params={"league": row.id, "refresh": True,
+                                              "compact": True, "top": 1}).json()  # fmt: skip
+    assert "by_team" not in c and len(c["league_wide"]) == 1
+    x = c["league_wide"][0]
+    assert {"grade", "give", "get", "you_per_week", "them_per_week", "acceptance",
+            "reasons_you", "reasons_them"} <= set(x)  # fmt: skip
+    assert "what_they_see" not in x and len(x["reasons_you"]) <= 2
+    assert c["shown"].startswith(f"1 of {len(full['league_wide'])} offers")

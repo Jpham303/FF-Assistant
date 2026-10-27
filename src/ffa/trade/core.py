@@ -27,7 +27,8 @@ STREAMABLE_SEEN = 0.1  # share of their points managers credit in a trade
 PLAYOFF_WEIGHT = 2.0  # playoff weeks count this much when the toggle is on
 CLOSE = 0.5  # points a week: below this, a lineup change is a wash
 RANK_GAP = 10  # positional ranks: rank so far vs projected rank, flagged beyond this
-FA_PER_POSITION = 8  # free agents considered per position when filling a spot
+FA_PER_POSITION = 3  # free agents tried per position when filling a spot (the best is
+# almost always among the top 3 by rest-of-season points; 8 made the search 2x slower)
 
 
 @dataclass
@@ -81,6 +82,11 @@ class League:
     # (position, week) -> the best free agent's expected points: kickers and defenses
     # are streamed, so a K or DEF slot is never worth less than this (see with_streams)
     stream: dict[tuple[str, int], float] = field(default_factory=dict)
+    _cache: dict = field(default_factory=dict, repr=False, compare=False)
+
+    def changed(self) -> None:
+        """Call after changing players' numbers in place: drops cached lineups."""
+        self._cache.clear()
 
     def weight(self, w: int, playoff_weighting: bool) -> float:
         return PLAYOFF_WEIGHT if playoff_weighting and w in self.playoff_weeks else 1.0
@@ -90,7 +96,17 @@ class League:
 
 
 def lineup(lg: League, keys: list[str], w: int) -> tuple[float, float, list[str | None]]:
-    """Best lineup for week w: (expected points, variance, starter per slot)."""
+    """Best lineup for week w: (expected points, variance, starter per slot). Cached per
+    roster and week: the search scores the same rosters many times while weighing drops
+    (the League's players and streams don't change during a search)."""
+    ck = (frozenset(keys), w)
+    hit = lg._cache.get(ck)
+    if hit is None:
+        hit = lg._cache[ck] = _lineup(lg, keys, w)
+    return hit[0], hit[1], list(hit[2])
+
+
+def _lineup(lg: League, keys: list[str], w: int) -> tuple[float, float, list[str | None]]:
     order = sorted(range(len(lg.slots)), key=lambda i: len(SLOT_ELIGIBILITY.get(lg.slots[i], ())))
     used: set[str] = set()
     starters: list[str | None] = [None] * len(lg.slots)
@@ -128,6 +144,7 @@ def with_streams(lg: League) -> League:
     what he beats the waiver wire by, week by week (Oct 27: packages padded with
     defenses read as real value)."""
     lg.stream = {}
+    lg.changed()
     for k in lg.free_agents:
         p = lg.players.get(k)
         if p is None or p.position not in STREAMABLE:
@@ -179,6 +196,24 @@ def bench_credit(lg: League, keys: list[str], w: int, starters: list[str | None]
     return out
 
 
+def drop_costs(lg: League, roster: list[str], candidates: list[str],
+               playoff_weighting: bool = False) -> dict[str, float]:  # fmt: skip
+    """What dropping each candidate costs the lineup, rest of season. Exact and fast:
+    a player changes a week's lineup only if he starts, is a credited backup, or holds
+    a K/DEF spot (the stream needs it); any other week he costs 0, so only those weeks
+    are recomputed."""
+    costs = {k: 0.0 for k in candidates}
+    for w in lg.weeks:
+        tot, _, st = lineup(lg, roster, w)
+        involved = {k for k in st if k} | set(bench_credit(lg, roster, w))
+        involved |= {k for k in roster if k in lg.players
+                     and lg.players[k].position in STREAMABLE}  # fmt: skip
+        wt = lg.weight(w, playoff_weighting)
+        for k in involved & costs.keys():
+            costs[k] += wt * (tot - lineup(lg, [x for x in roster if x != k], w)[0])
+    return costs
+
+
 def value(lg: League, keys: list[str], playoff_weighting: bool = False) -> float:
     return sum(lg.weight(w, playoff_weighting) * lineup(lg, keys, w)[0] for w in lg.weeks)
 
@@ -222,9 +257,8 @@ def balance(lg: League, team: Team, after: list[str], ir_after: set[str],
     limit = max(team.size_limit, team.counted(team.roster))
     open_before = limit - team.counted(team.roster)
     while team.counted(roster, ir_after) > limit:  # drop whoever costs the lineup least
-        base = value(lg, roster, playoff_weighting)
-        cost = {k: base - value(lg, [x for x in roster if x != k], playoff_weighting)
-                for k in roster if k not in ir_after}  # fmt: skip
+        cost = drop_costs(lg, roster, [k for k in roster if k not in ir_after],
+                          playoff_weighting)  # fmt: skip
         k = min(cost, key=lambda x: (round(cost[x], 6), _ros(lg, x)))  # ties: fewest points
         roster.remove(k)
         p = lg.players.get(k)
@@ -307,8 +341,8 @@ def with_waivers(lg: League, playoff_weighting: bool = False, protect: frozenset
             if team.counted(roster) < max(team.size_limit, 1):
                 drops: list[str | None] = [None]
             else:
-                cost = {k: base - value(out, [x for x in roster if x != k], pw)
-                        for k in roster if k not in protect and k not in team.ir}  # fmt: skip
+                cands = [k for k in roster if k not in protect and k not in team.ir]
+                cost = drop_costs(out, roster, cands, pw)
                 drops = sorted(cost, key=lambda x: (round(cost[x], 6), _ros(lg, x)))[:WAIVER_DROPS]
             best, best_gain = None, WAIVER_MIN * n
             for d in drops:

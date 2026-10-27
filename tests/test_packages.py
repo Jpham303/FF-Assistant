@@ -82,3 +82,15 @@ def test_generate_on_hand_built_rosters():
     for o in offers:
         assert o.mine >= P.OFFER_MIN_GAIN - P.NEAR_GAIN
         assert P.grade(o.mine, o.score)[0] == o.grade
+
+
+def test_a_cut_costs_no_more_than_he_will_give_them():
+    """Oct 27: Lamar Jackson (0.6 a week ahead) was charged as a ~6-a-game cut."""
+    from ffa.trade.search import Package
+
+    lg = _league()
+    lg.players["QB2"].ppg = lg.players["QB2"].last3 = 21.0  # looks like a star
+    lg.players["QB2"].weekly = {8: (0.6, 1.0), 9: (0.6, 1.0), 10: (0.6, 1.0)}  # hurt
+    assert P.cut_value(lg, lg.players["QB2"]) == 0.6
+    pk = Package("them", ("RB3",), ("WR4",), 0.0, 0.0, cuts=("QB2",))
+    assert round(P.acceptance(lg, pk, 0.0)[1]["cuts"], 2) == -0.18  # 0.3 x 0.6

@@ -327,16 +327,23 @@ def trade_targets(give: list[str] | None = None, position: str | None = None,
 
 @mcp.tool(annotations=READ_ONLY)
 def trade_packages(partner: str | None = None, refresh: bool = False,
-                   league: str | None = None, playoff_weighting: bool = False) -> dict:  # fmt: skip
+                   league: str | None = None, playoff_weighting: bool = False,
+                   top: int = 12, full: bool = False) -> dict:  # fmt: skip
     """Trade offers to make: for every opponent in the user's league (or one `partner`
     team), the best offer in each acceptance grade (Likely, Fair, Stretch, Long shot)
     where the user gains, with both lineups' change per week, playoff odds, reasons for
     both sides (with numbers) and what the other manager sees (points per game so far,
     last 3 games, draft pick, injury). league_wide lists them all, Likely first, by the
-    user's gain. Precomputed daily; refresh=true recomputes (can take a minute or two).
-    Read-only: never proposes anything."""
+    user's gain. Compact by default (the best `top` offers, the fields needed to
+    decide); full=true for every field (large). Precomputed daily; refresh=true
+    recomputes (can take a minute). Read-only: never proposes anything."""
     try:
-        params = {"refresh": refresh, "playoff_weighting": playoff_weighting}
+        params = {
+            "refresh": refresh,
+            "playoff_weighting": playoff_weighting,
+            "compact": not full,
+            "top": top,
+        }
         params |= {"partner": partner} if partner else {}
         params |= {"league": league} if league else {}
         return _call("GET", "/trade/packages", params=params)

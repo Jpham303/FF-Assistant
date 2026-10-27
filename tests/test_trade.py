@@ -244,11 +244,13 @@ def test_a_backup_is_worth_the_chance_a_starter_misses():
     base = core.lineup(lg, me.roster, 8)[0]  # everyone certain to play: backup adds 0
     assert base == core.lineup(lg, [k for k in me.roster if k != "QBB"], 8)[0]
     lg.players["QB1"].play = {8: 0.8}  # starter 80% to play (20 expected, as before)
+    lg.changed()
     # Week 8: QB1 misses 20% of the time; QBB (18) then plays: +0.2 x 18 = 3.6.
     assert round(core.lineup(lg, me.roster, 8)[0] - base, 6) == 3.6
     # Two risky starters, one backup: the riskier gets him (RB1 30% to miss vs RB2 10%).
     lg.players["QB1"].play = {}
     lg.players["RB1"].play, lg.players["RB2"].play = {8: 0.7}, {8: 0.9}
+    lg.changed()
     # RB3 (5) is the bench RB; WR2 (6) is the flex starter: RB3 backs up RB1: 0.3 x 5.
     # RB2's miss has no backup left: RBs only (QBB can't play RB).
     assert round(core.lineup(lg, me.roster, 8)[0] - base, 6) == 1.5

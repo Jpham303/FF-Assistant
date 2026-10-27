@@ -26,6 +26,8 @@ from ffa.trade.core import STREAMABLE, League, after_trade, balance, lineup, val
 MAX_SIDE = 4
 CANDIDATES = 6  # per side, per opponent: players tried when growing a package
 SEEDS = 12  # per side, per opponent: every 1-for-1 among these is scored
+GROW_MIN = 0.5  # points a week for you: 1-for-1s worth growing by one more player
+GROW_FIRST = 10  # of those, the best this many get every sweetener tried
 BEAM = 4  # packages per opponent kept at each growth step
 MY_MIN_GAIN = 0.1  # points a week: at least a slight edge
 THEIR_MAX_LOSS = 1.0  # points a week: they can lose this much and still say yes
@@ -158,15 +160,23 @@ def team_pool(lg: League, me: str, tid: str, *, give: tuple[str, ...] = (),
             if m > 0:
                 seeds.append(Package(tid, gv_, (g,), m, t, cuts=cuts))
     pool = {p.key(): p for p in seeds}
-    beam = _best(seeds, n, max_loss)
     # Grow: one more player on either side while it helps both (sweetener /
-    # consolidation). Named offers stay fixed on your side.
+    # consolidation). Named offers stay fixed on your side. The first step grows EVERY
+    # swap already worth offering for you, sweeteners from the SEEDS best (Oct 27:
+    # Jameson + Barkley for Hubbard, +1.87 / +0.03, was missed: its 1-for-1 wasn't in
+    # the beam, and Barkley wasn't among the 6 sweeteners tried). Later steps keep
+    # the beam.
+    worth = sorted((p for p in seeds if p.mine >= GROW_MIN * n), key=lambda p: -p.mine)
+    beam = worth[:GROW_FIRST] or _best(seeds, n, max_loss)
+    first = True
     for _ in range(2 * (MAX_SIDE - 1)):
         grown: list[Package] = []
+        width = SEEDS if first else CANDIDATES
+        first = False
         for p in beam:
             adds_give = [] if fixed else [k for k in gives if k not in p.give]
             adds_get = [k for k in gets[:CANDIDATES] if k not in p.get]
-            for k in adds_give[:CANDIDATES] if len(p.give) < MAX_SIDE else []:
+            for k in adds_give[:width] if len(p.give) < MAX_SIDE else []:
                 q = _try(lg, me, tid, p.give + (k,), p.get, pw, pool)
                 if q and q.theirs > p.theirs and q.mine > 0:
                     q.tags = sorted({*p.tags, "sweetener"})

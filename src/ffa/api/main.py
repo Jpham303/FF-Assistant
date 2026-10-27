@@ -416,6 +416,16 @@ def trade_evaluate(req: TradeRequest, con=Depends(get_con), db=Depends(get_db)) 
     return out | {"league": row.name, "season": season, "from_week": w}
 
 
+def _shape(payload: dict, compact: bool, top: int | None) -> dict:
+    from ffa.trade import service as trade_service
+
+    if compact:
+        return trade_service.compact(payload, top or trade_service.COMPACT_TOP)
+    if top:
+        return payload | {"league_wide": payload["league_wide"][:top]}
+    return payload
+
+
 class TargetsRequest(BaseModel):
     give: list[str] = Field(default_factory=list, max_length=4,
                             description="Players you're offering (keys); empty = any")  # fmt: skip
@@ -428,12 +438,15 @@ class TargetsRequest(BaseModel):
 @app.get("/trade/packages")
 def trade_packages(league: str | None = None, partner: str | None = None,
                    refresh: bool = False, playoff_weighting: bool = False,
+                   compact: bool = False, top: int | None = None,
                    con=Depends(get_con), db=Depends(get_db)) -> dict:  # fmt: skip
     """The package generator: for every opponent (or `partner`), the best offer in each
     acceptance grade (Likely, Fair, Stretch, Long shot) where you gain, each scored like
     /trade/evaluate with reasons for both sides and what the other manager sees. Served
     from the daily precompute (after rest of season); `refresh`, a partner or playoff
-    weighting compute it now (up to a minute or two for a whole league)."""
+    weighting compute it now (up to a minute or two for a whole league). `compact`: the
+    best `top` offers (default 12) with only the fields needed to decide, for chat
+    clients; `top` alone trims the full form."""
     if db is None:
         raise HTTPException(503, "App database not configured")
     row = _league(db, league)
@@ -450,7 +463,8 @@ def trade_packages(league: str | None = None, partner: str | None = None,
                 saved["by_team"] = [t for t in saved["by_team"] if t["team"].lower() == want]
                 saved["league_wide"] = [x for x in saved["league_wide"]
                                         if x["partner"].lower() == want]  # fmt: skip
-            return saved | {"league": row.name, "season": season, "from_week": w}
+            return _shape(saved, compact, top) | {"league": row.name, "season": season,
+                                                  "from_week": w}  # fmt: skip
     rules, _label = _rules(row)
     try:
         out = trade_service.trade_packages(con, db, row, rules, season, w, playoff_weighting,
@@ -459,7 +473,7 @@ def trade_packages(league: str | None = None, partner: str | None = None,
         raise HTTPException(422, str(e)) from e
     except LookupError as e:
         raise HTTPException(503, str(e)) from e
-    return out | {"league": row.name, "season": season, "from_week": w}
+    return _shape(out, compact, top) | {"league": row.name, "season": season, "from_week": w}
 
 
 @app.post("/trade/targets")

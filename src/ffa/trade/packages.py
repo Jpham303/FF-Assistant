@@ -73,6 +73,15 @@ def perceived(p: Player) -> float:
     return base
 
 
+def cut_value(lg: League, p: Player) -> float:
+    """What cutting him costs a manager, a game: what he looks like, but never more than
+    he's projected to give them a week from here. A player who isn't going to play
+    isn't a painful cut, whatever his name (Oct 27: Lamar Jackson, 0.6 a week ahead,
+    charged as ~6 a game)."""
+    ahead = p.ros(lg.weeks) / max(len(lg.weeks), 1)
+    return min(perceived(p), ahead)
+
+
 def side_value(lg: League, keys: tuple[str, ...] | list[str]) -> float:
     vals = sorted((perceived(lg.players[k]) for k in keys if k in lg.players), reverse=True)
     return sum(v * w for v, w in zip(vals, STUD_WEIGHTS, strict=False))
@@ -92,7 +101,7 @@ def acceptance(lg: League, p: Package, theirs: float,
     they never had them."""
     looks_pts = side_value(lg, p.give) - side_value(lg, p.get)
     cut = [k for k in p.cuts if k not in untradeable and k in lg.players]
-    cut_pts = sum(perceived(lg.players[k]) for k in cut)
+    cut_pts = sum(cut_value(lg, lg.players[k]) for k in cut)
     score = theirs + LOOKS_WEIGHT * looks_pts - CUT_WEIGHT * cut_pts
     return score, {"their_lineup": round(theirs, 2),
                    "how_it_looks": round(LOOKS_WEIGHT * looks_pts, 2),
