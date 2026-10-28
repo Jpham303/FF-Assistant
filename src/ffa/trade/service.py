@@ -304,6 +304,7 @@ def trade_packages(con, db, row: LeagueRow, rules: ScoringRules, season: int, we
         "waiver_baseline": _waiver_dict(ctx, waivers, {ctx.me}),
         "weeks": lg.weeks, "scoring": ctx.scoring, "as_of": ctx.as_of, "notes": ctx.notes,
         "generated_at": t0.isoformat(),
+        "payload_version": PAYLOAD_VERSION,
         "seconds": round((datetime.now(UTC) - t0).total_seconds(), 1),
     }  # fmt: skip
 
@@ -338,6 +339,10 @@ def _seen(lg: core.League, give, get, looks: float) -> dict:
 
 
 DATASET = "trade_packages"  # precomputed daily after rest of season
+# Bumped when an offer gains fields the tools rely on: a saved run in an older format is
+# recomputed instead of served (Oct 28: a board saved before title odds existed showed
+# none until the next daily run).
+PAYLOAD_VERSION = 2
 
 
 def save_all(warehouse_dir, season: int, week: int, payloads: dict[str, dict],
@@ -369,7 +374,10 @@ def saved_packages(con, league_id: str, season: int, week: int) -> dict | None:
                    "order by _ingested_at desc limit 1", params=[league_id]).fetchall()  # fmt: skip
     if not rows:
         return None
-    return json.loads(rows[0][0]) | {"precomputed_at": str(rows[0][1])}
+    payload = json.loads(rows[0][0])
+    if payload.get("payload_version", 1) < PAYLOAD_VERSION:
+        return None  # an older format: recompute
+    return payload | {"precomputed_at": str(rows[0][1])}
 
 
 COMPACT_TOP = 12
@@ -381,10 +389,21 @@ def compact(payload: dict, top: int | None = COMPACT_TOP) -> dict:
     trade, both sides' change, the grade and its parts, 2 reasons a side, your playoff
     odds), and no per-team copy."""
 
+    def season_odds(block: dict | None) -> dict | None:
+        """{you, them} -> "before -> after (change)" in percent: the change written out,
+        so a chat client states it (Oct 28: offers showed before/after only, and the
+        change never reached the user)."""
+        if not block:
+            return None
+        out = {}
+        for side in ("you", "them"):
+            v = block.get(side)
+            if v and v.get("before") is not None and v.get("after") is not None:
+                b, a = 100 * v["before"], 100 * v["after"]
+                out[side] = f"{b:.1f}% -> {a:.1f}% ({a - b:+.1f} pts)"
+        return out or None
+
     def short(x: dict) -> dict:
-        odds = x.get("playoff_odds") or {}
-        you = odds.get("you") or {}
-        title = (x.get("title_odds") or {}).get("you") or {}
         return {
             "grade": x["grade"], "grade_note": x.get("grade_note"),
             "partner": x["partner"], "give": x["give"], "get": x["get"],
@@ -392,8 +411,8 @@ def compact(payload: dict, top: int | None = COMPACT_TOP) -> dict:
             "acceptance": x.get("acceptance"),
             "reads_as": (x.get("what_they_see") or {}).get("reads_as"),
             "reasons_you": x["reasons_you"][:2], "reasons_them": x["reasons_them"][:2],
-            "your_playoff_odds": [you.get("before"), you.get("after")] if you else None,
-            "your_title_odds": [title.get("before"), title.get("after")] if title else None,
+            "playoff_odds": season_odds(x.get("playoff_odds")),
+            "title_odds": season_odds(x.get("title_odds")),
             "shape": x.get("shape"),
             "cuts_them": [d["name"] for d in x.get("drops_them", [])],
             "drops_you": [d["name"] for d in x.get("drops_you", [])],

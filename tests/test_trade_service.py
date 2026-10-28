@@ -273,6 +273,11 @@ def test_trade_packages_live_saved_api_and_tool(trade_league, client):  # noqa: 
     service.save_all(wh, SEASON, WEEK, {row.id: r | {"marker": "saved"}})
     got = client.get("/trade/packages", params={"league": row.id}).json()
     assert got["marker"] == "saved" and "precomputed_at" in got
+    # A run saved before a format change (no payload_version) is recomputed, not served.
+    old = {k: v for k, v in r.items() if k != "payload_version"}
+    service.save_all(wh, SEASON, WEEK, {row.id: old | {"marker": "old"}})
+    assert service.saved_packages(duck.connect(wh), row.id, SEASON, WEEK) is None
+    service.save_all(wh, SEASON, WEEK, {row.id: r | {"marker": "saved"}})
     live = client.get("/trade/packages", params={"league": row.id, "refresh": True}).json()
     assert "marker" not in live and live["by_team"][0]["team"] == "Theirs"
     one = client.get("/trade/packages", params={"league": row.id, "partner": "theirs"}).json()
@@ -350,3 +355,7 @@ def test_compact_output_is_short_and_keeps_what_decides(trade_league, client):  
             "reasons_you", "reasons_them"} <= set(x)  # fmt: skip
     assert "what_they_see" not in x and len(x["reasons_you"]) <= 2
     assert c["shown"].startswith(f"1 of {len(full['league_wide'])} offers")
+    # Oct 28: the change in playoff and title odds is written out, both teams.
+    for kind in ("playoff_odds", "title_odds"):
+        assert set(x[kind]) == {"you", "them"} and " pts)" in x[kind]["you"]
+        assert "% -> " in x[kind]["them"]
