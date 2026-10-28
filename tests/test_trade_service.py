@@ -67,6 +67,12 @@ def test_evaluate_trade_both_sides_free_agent_and_playoff_odds(trade_league):
     assert r["you"]["per_week"] == 13.0 and r["you"]["ros_change"] == 65.0
     assert r["them"]["per_week"] == -4.0 and r["them"]["team_name"] == "Theirs"
     assert r["playoff_odds"]["you"]["after"] > r["playoff_odds"]["you"]["before"]
+    you = r["playoff_odds"]["you"]
+    assert you["change"] == pytest.approx(you["after"] - you["before"], abs=1e-3)
+    # One playoff spot here: the title goes to the top seed, so title odds track it.
+    t = r["title_odds"]
+    assert t["you"]["after"] > t["you"]["before"] and t["them"]["change"] < 0
+    assert t["you"]["after"] + t["them"]["after"] == pytest.approx(1.0, abs=0.01)
     assert r["give"] == ["00-A"] and r["get"] == ["00-Q"]
 
 

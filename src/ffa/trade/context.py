@@ -28,6 +28,7 @@ class Context:
     current: dict[str, tuple[float, float]] = field(default_factory=dict)  # this week so far
     current_week: int | None = None  # set when this week is under way
     playoff_teams: int | None = None
+    playoff_round_type: int = 0  # Sleeper: 0 a week a round, 1 two-week final, 2 two weeks
     as_of: str | None = None
     scoring: str = "default"
     notes: list[str] = field(default_factory=list)
@@ -112,6 +113,7 @@ def build(con, db, row: LeagueRow, rules: ScoringRules, season: int, week: int,
     ctx = Context(lg, me.id, {t.id: (t.wins + 0.5 * t.ties, float(t.points_for or 0.0))
                               for t in teams_rows},  # fmt: skip
                   playoff_teams=settings.get("playoff_teams"),
+                  playoff_round_type=int(settings.get("playoff_round_type") or 0),
                   as_of=str(snap["_ingested_at"].max()) if "_ingested_at" in snap.columns else None,
                   scoring=lg_id, notes=notes)  # fmt: skip
     if pstart:

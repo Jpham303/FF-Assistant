@@ -75,7 +75,7 @@ baselines on start/sit accuracy). Rules for answering with these tools:
 11. Trade questions ("should I trade X for Y", "is this fair"): call evaluate_trade, never
    web search. Lead with the verdict and its reason, then your lineup change per week and
    over the rest of the season (and in playoff weeks), the other team's change (is it
-   realistic for them?), playoff odds before/after, any free agent added (by name, with
+   realistic for them?), playoff and title odds before/after, any free agent added (by name, with
    his points) or player dropped, and the flags in how_it_looks. p_ahead is approximate
    (players treated as independent); say so if it's near 50%. If your_trade_value has a
    flag, say how much rest-of-season value the user gives up: a lineup gain has to be
@@ -86,7 +86,8 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    call trade_targets (never web search). It applies trade_packages' checks to the
    question asked. Start with the user's biggest needs, then each package, best grade
    first: what he gives and gets, the grade and its acceptance parts, his gain per week
-   and theirs, the shape (straight swap, sweetener, consolidation), playoff odds change,
+   and theirs, the shape (straight swap, sweetener, consolidation), playoff and title odds
+   change,
    and any free-agent add. Then near_misses, saying what each missed by (grade_note).
    An empty list means nothing passes the checks: say so, don't loosen them. It only
    suggests: sending an offer is up to the user, in Sleeper.
@@ -102,7 +103,7 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    and Long shot, then any Near miss (say what it missed by: grade_note). For each: what
    the user gives and gets, his gain a week and theirs, the grade and its acceptance
    parts (their lineup, how it looks, anyone they'd cut), reasons for both sides,
-   playoff odds. skipped_pickups are waiver pickups the trade leaves no room for, not
+   playoff and title odds. skipped_pickups are waiver pickups the trade leaves no room for, not
    players he owns. Grades are a scored judgment, not a probability.
 16. Injuries: judge how serious an injury is and when a player returns ONLY from what the
    tools return: the designation, play_probability, the rest-of-season chance to play
@@ -113,6 +114,10 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    who is back. Say "out for the season" only if a tool says so (a season-ending reserve
    listing or note). No return date exists in this data: never invent one; say what the
    reports show (e.g. "practicing in full, upgraded to Questionable: on track to return").
+17. Every trade: say what its weekly gain means for the season, from playoff_odds and
+   title_odds (`change`, both teams), e.g. "+1.2 a week: playoff odds 54% -> 61%, title
+   odds 9% -> 12%". Title odds simulate the league's bracket (seeding, byes, round
+   lengths). If title_odds is null, say it's unavailable and why (notes).
 """
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
@@ -303,7 +308,7 @@ def evaluate_trade(give: list[str], get: list[str], league: str | None = None,
     fantasy playoff weeks), who gets dropped and which free agent fills a freed spot
     (named, with the points he adds), how it looks to managers (season-to-date positional
     rank for same-position trades, projected points otherwise, with stale-rank flags),
-    playoff odds before and after for both teams, a verdict and the reasons.
+    playoff and title odds before and after for both teams, a verdict and the reasons.
     give: the user's players; get: players from ONE other team (names or keys, up to 4 a
     side). playoff_weighting: count playoff weeks double. Read-only: it never proposes
     anything in Sleeper."""
@@ -349,7 +354,8 @@ def trade_packages(partner: str | None = None, refresh: bool = False,
                    top: int = 12, full: bool = False) -> dict:  # fmt: skip
     """Trade offers to make: for every opponent in the user's league (or one `partner`
     team), the best offer in each acceptance grade (Likely, Fair, Stretch, Long shot)
-    where the user gains, with both lineups' change per week, playoff odds, reasons for
+    where the user gains, with both lineups' change per week, playoff and title odds,
+    reasons for
     both sides (with numbers) and what the other manager sees (points per game so far,
     last 3 games, draft pick, injury). league_wide lists them all, Likely first, by the
     user's gain. Compact by default (the best `top` offers, the fields needed to

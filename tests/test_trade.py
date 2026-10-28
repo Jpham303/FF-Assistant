@@ -117,6 +117,49 @@ def test_playoff_odds_follow_strength_and_standings():
     assert playoffs.odds(records, stronger, sched, 2, n=4000)["d"] > o["d"]
 
 
+def test_bracket_order_and_round_weeks():
+    from ffa.trade import playoffs
+
+    assert playoffs.bracket_order(4) == [1, 4, 2, 3]
+    assert playoffs.bracket_order(8) == [1, 8, 4, 5, 2, 7, 3, 6]  # 6 teams: 1, 2 get byes
+    assert playoffs.round_weeks([15, 16, 17], 3, 0) == [[15], [16], [17]]
+    assert playoffs.round_weeks([15, 16], 1, 1) == [[15, 16]]  # two-week final
+    assert playoffs.round_weeks([15, 16, 17, 18], 2, 2) == [[15, 16], [17, 18]]
+    assert playoffs.round_weeks([15, 16], 3, 0) is None  # not every round projected
+
+
+def _six(mu: dict[str, float], wins: dict[str, float]) -> tuple:
+    teams = sorted(mu)
+    records = {t: (wins[t], 600.0) for t in teams}
+    weekly = {t: {w: (mu[t], 400.0) for w in (12, 13, 14, 15, 16, 17)} for t in teams}
+    pairs = [(teams[i], teams[i + 1]) for i in range(0, len(teams), 2)]
+    return records, weekly, {12: pairs, 13: pairs, 14: pairs}
+
+
+def test_title_odds_from_the_bracket():
+    """Oct 28: title odds alongside playoff odds for every trade."""
+    from ffa.trade import playoffs
+
+    teams = [chr(97 + i) for i in range(8)]
+    # Equal strength; records set the seeds (3 games can't close a 4-win gap).
+    wins = {t: 40 - 4 * i for i, t in enumerate(teams)}
+    rec, wk, sch = _six({t: 100.0 for t in teams}, wins)
+    o = playoffs.season(rec, wk, sch, 6, [15, 16, 17], 0, n=6000)
+    assert sum(v["title"] for v in o.values()) == pytest.approx(1.0, abs=0.005)
+    assert o["g"]["title"] == 0 and o["h"]["title"] == 0  # not in the playoffs, no title
+    # Byes: the top two seeds play two rounds, the others three.
+    assert o["a"]["title"] == pytest.approx(0.25, abs=0.03)
+    assert o["c"]["title"] == pytest.approx(0.125, abs=0.03)
+    # A team far stronger than the rest wins nearly every time it's in.
+    strong = {t: 100.0 for t in teams} | {"d": 200.0}
+    rec2, wk2, sch2 = _six(strong, wins)
+    o2 = playoffs.season(rec2, wk2, sch2, 6, [15, 16, 17], 0, n=4000)
+    assert o2["d"]["title"] > 0.95
+    # Two-week rounds need more weeks than are projected: no title odds, playoffs still.
+    o3 = playoffs.season(rec, wk, sch, 6, [15, 16, 17], 2, n=1000)
+    assert o3["a"]["title"] is None and o3["a"]["playoffs"] > 0.9
+
+
 # ---------------------------------------------------------------- target search
 
 from ffa.trade import search  # noqa: E402

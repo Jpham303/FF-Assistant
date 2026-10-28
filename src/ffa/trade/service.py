@@ -10,10 +10,13 @@ from ffa.trade import context, core, packages, playoffs, search
 
 
 def _weekly(ctx: context.Context, rosters: dict[str, list[str]]) -> dict:
+    """team -> week -> (expected points, variance) of its best lineup: the remaining
+    regular season and the playoff weeks (for title odds)."""
     out: dict[str, dict[int, tuple[float, float]]] = {}
+    weeks = sorted(set(ctx.schedule) | set(ctx.league.playoff_weeks))
     for tid, keys in rosters.items():
         out[tid] = {}
-        for w in ctx.schedule:
+        for w in weeks:
             if w == ctx.current_week:
                 out[tid][w] = ctx.current.get(tid, (0.0, 0.0))
             else:
@@ -53,6 +56,9 @@ def evaluate_trade(con, db, row: LeagueRow, rules: ScoringRules, season: int, we
     if res["playoff_odds"] is None:
         ctx.notes.append("Playoff odds unavailable: the league's playoff settings or schedule "
                          "aren't synced (run leagues_refresh).")  # fmt: skip
+    elif res["title_odds"] is None:
+        ctx.notes.append("Title odds unavailable: not every playoff week is projected yet "
+                         "(they're added by the next rest-of-season run).")  # fmt: skip
     return res
 
 
@@ -65,18 +71,34 @@ def _evaluate(ctx: context.Context, partner: str, give: list[str], get: list[str
     res["them"]["team_name"] = lg.teams[partner].name
     if ctx.schedule and ctx.playoff_teams:
         rosters = {tid: t.roster for tid, t in lg.teams.items()}
-        before = playoffs.odds(ctx.records, _weekly(ctx, rosters), ctx.schedule,
-                               int(ctx.playoff_teams))  # fmt: skip
+
+        def run(r: dict) -> dict:  # same seed both times: the change isn't simulation noise
+            return playoffs.season(ctx.records, _weekly(ctx, r), ctx.schedule,
+                                   int(ctx.playoff_teams), sorted(lg.playoff_weeks),
+                                   ctx.playoff_round_type)  # fmt: skip
+
+        before = run(rosters)
         rosters |= {ctx.me: res["you"]["roster_after"], partner: res["them"]["roster_after"]}
-        after = playoffs.odds(ctx.records, _weekly(ctx, rosters), ctx.schedule,
-                              int(ctx.playoff_teams))  # fmt: skip
+        after = run(rosters)
+
+        def side(kind: str, tid: str) -> dict | None:
+            b, a = before[tid][kind], after[tid][kind]
+            if b is None or a is None:
+                return None
+            return {"before": b, "after": a, "change": round(a - b, 3)}
+
         res["playoff_odds"] = {
-            "you": {"before": before[ctx.me], "after": after[ctx.me]},
-            "them": {"before": before[partner], "after": after[partner]},
+            "you": side("playoffs", ctx.me), "them": side("playoffs", partner),
             "regular_season_weeks_left": sorted(ctx.schedule),
         }  # fmt: skip
+        title = {"you": side("title", ctx.me), "them": side("title", partner)}
+        res["title_odds"] = (title | {"playoff_weeks": sorted(lg.playoff_weeks),
+                                      "bracket": f"{ctx.playoff_teams} teams, fixed bracket, "
+                                                 "top seeds get any byes"}
+                             if title["you"] is not None else None)  # fmt: skip
     else:
         res["playoff_odds"] = None
+        res["title_odds"] = None
     res["give"], res["get"] = _names(lg, give), _names(lg, get)
     for side in ("you", "them"):
         res[side].pop("roster_after", None)
@@ -126,6 +148,7 @@ def _offer_item(ctx: context.Context, tid: str, o: packages.Offer, team_needs: d
         "their_needs_filled": sorted({lg.players[k].position for k in p.give
                                       if team_needs[tid].get(lg.players[k].position, 0) > 0}),
         "playoff_odds": res["playoff_odds"],
+        "title_odds": res["title_odds"],
         **_moves(res["you"], picked, "you"), **_moves(res["them"], picked, "them"),
         "verdict": res["verdict"], "p_ahead": res["p_ahead"],
         # Target search: both sides in full, like evaluate_trade (trade_packages keeps
@@ -361,6 +384,7 @@ def compact(payload: dict, top: int | None = COMPACT_TOP) -> dict:
     def short(x: dict) -> dict:
         odds = x.get("playoff_odds") or {}
         you = odds.get("you") or {}
+        title = (x.get("title_odds") or {}).get("you") or {}
         return {
             "grade": x["grade"], "grade_note": x.get("grade_note"),
             "partner": x["partner"], "give": x["give"], "get": x["get"],
@@ -369,6 +393,7 @@ def compact(payload: dict, top: int | None = COMPACT_TOP) -> dict:
             "reads_as": (x.get("what_they_see") or {}).get("reads_as"),
             "reasons_you": x["reasons_you"][:2], "reasons_them": x["reasons_them"][:2],
             "your_playoff_odds": [you.get("before"), you.get("after")] if you else None,
+            "your_title_odds": [title.get("before"), title.get("after")] if title else None,
             "shape": x.get("shape"),
             "cuts_them": [d["name"] for d in x.get("drops_them", [])],
             "drops_you": [d["name"] for d in x.get("drops_you", [])],
