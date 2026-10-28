@@ -83,11 +83,13 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    pickups the user (or they) could make right now without trading: the trade is scored
    after those, so mention them; they're worth doing either way.
 12. "Who should I target", "I need a RB, what's realistic", "what can I get for X":
-   call trade_targets (never web search). Start with the user's biggest needs, then each
-   package: what he gives and gets, his gain per week and theirs (the other side must not
-   lose much, or it won't be accepted), the shape (straight swap, sweetener,
-   consolidation), playoff odds change, and any free-agent add. It only suggests:
-   sending an offer is up to the user, in Sleeper.
+   call trade_targets (never web search). It applies trade_packages' checks to the
+   question asked. Start with the user's biggest needs, then each package, best grade
+   first: what he gives and gets, the grade and its acceptance parts, his gain per week
+   and theirs, the shape (straight swap, sweetener, consolidation), playoff odds change,
+   and any free-agent add. Then near_misses, saying what each missed by (grade_note).
+   An empty list means nothing passes the checks: say so, don't loosen them. It only
+   suggests: sending an offer is up to the user, in Sleeper.
 13. A player in rest_of_season's not_found has NO projection: say it's missing (a data
    problem to report), never treat him as worth 0 points or compare anyone against him.
 14. Players share last names (Pierce: Alec, IND WR, and Dameon, PHI RB). A last name alone
@@ -320,12 +322,14 @@ def evaluate_trade(give: list[str], get: list[str], league: str | None = None,
 def trade_targets(give: list[str] | None = None, position: str | None = None,
                   partner: str | None = None, league: str | None = None,
                   playoff_weighting: bool = False) -> dict:  # fmt: skip
-    """Who should I target in a trade? Searches every other roster in the user's league
-    for trades that raise the user's weekly lineup and don't hurt the other team's much,
-    and returns up to 5 (one per team unless partner is set), each fully scored like
-    evaluate_trade, plus the user's needs by position. give: players the user is offering
+    """Who should I target in a trade? The trade package generator narrowed to the
+    question: trades that raise the user's weekly lineup by at least the minimum gain
+    (more when he gives up trade value), graded by how likely the other manager is to
+    accept (Likely, Fair, Stretch, Long shot). Returns up to 5, best grade first (one per
+    team unless partner is set), each fully scored like evaluate_trade, plus up to 3
+    near misses and the user's needs by position. give: players the user is offering
     (names; empty = any); position: only targets at this position ("I need a RB");
-    partner: only this team. Takes up to ~30 s. Read-only: never proposes anything."""
+    partner: only this team. Takes up to ~1 min league-wide. Read-only: never proposes anything."""
     try:
         keys_give, p1 = _resolve(give or [], None, need_projection=False)
         if p1:

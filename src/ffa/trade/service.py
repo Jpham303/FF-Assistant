@@ -83,6 +83,57 @@ def _evaluate(ctx: context.Context, partner: str, give: list[str], get: list[str
     return res
 
 
+GRADES_NOTE = {g: f"acceptance score at least {line} a week" for g, line in
+               packages.THRESHOLDS} | {packages.NEAR_MISS: "missed a grade or a minimum by a "
+                                       "hair (see grade_note)"}  # fmt: skip
+ACCEPTANCE_NOTE = (
+    f"Acceptance score = their lineup change a week + {packages.LOOKS_WEIGHT} x how it "
+    "looks to them (perceived points a game they come out ahead) - "
+    f"{packages.CUT_WEIGHT} x perceived points a game of anyone they'd have to cut. "
+    f"Your side: every offer gains you at least max({packages.OFFER_MIN_GAIN}, "
+    f"{packages.VALUE_RATIO} x your_value_lost_per_week) a week, shown as "
+    f"your_gain_needed ({packages.LONG_SHOT_MY_GAIN} at least for a long shot). "
+    "your_value_lost_per_week is value over replacement you give minus what you get "
+    "(each player's points a week above the best free agent at his position, best "
+    "player first, depth counted less): above 0 you give more than you get, and "
+    "the gain you need rises; below 0 you get more. Less than the minimum gain is "
+    "within the model's noise. A scored grade, not a probability: there's no data "
+    "on offers turned down. Completed trades in the league are logged to check it "
+    "later."
+)
+GRADE_ORDER = {g: i for i, g in enumerate((*packages.GRADES, packages.NEAR_MISS))}
+TARGETS_TOP, TARGETS_NEAR = 5, 3
+
+
+def _offer_item(ctx: context.Context, tid: str, o: packages.Offer, team_needs: dict,
+                picked: frozenset[str], playoff_weighting: bool,
+                full: bool = False) -> dict:  # fmt: skip
+    """One graded offer, fully scored like evaluate_trade, with reasons for both sides and
+    what the other manager sees (trade_packages and trade_targets alike)."""
+    lg, p = ctx.league, o.package
+    res = _evaluate(ctx, tid, list(p.give), list(p.get), playoff_weighting)
+    you, them = packages.reasons(lg, o, res, team_needs[tid])
+    return {
+        "grade": o.grade, "grade_note": o.note,
+        "acceptance": {"score": round(o.score, 2), **o.parts},
+        "partner": lg.teams[tid].name,
+        "give": res["give"], "get": res["get"],
+        "you_per_week": round(o.mine, 2), "them_per_week": round(o.theirs, 2),
+        "you_playoff_weeks": res["you"]["playoff_weeks_change"],
+        "reasons_you": you, "reasons_them": them,
+        "what_they_see": _seen(lg, p.give, p.get, o.looks),
+        "shape": p.tags or ["straight swap"],
+        "their_needs_filled": sorted({lg.players[k].position for k in p.give
+                                      if team_needs[tid].get(lg.players[k].position, 0) > 0}),
+        "playoff_odds": res["playoff_odds"],
+        **_moves(res["you"], picked, "you"), **_moves(res["them"], picked, "them"),
+        "verdict": res["verdict"], "p_ahead": res["p_ahead"],
+        # Target search: both sides in full, like evaluate_trade (trade_packages keeps
+        # its payload small).
+        **({"you": res["you"], "them": res["them"]} if full else {}),
+    }  # fmt: skip
+
+
 def trade_targets(con, db, row: LeagueRow, rules: ScoringRules, season: int, week: int,
                   give: list[str] | None = None, position: str | None = None,
                   partner: str | None = None, playoff_weighting: bool = False,
@@ -112,29 +163,44 @@ def trade_targets(con, db, row: LeagueRow, rules: ScoringRules, season: int, wee
     pos = position.upper() if position else None
     waivers = _apply_waivers(ctx, playoff_weighting, frozenset(give))
     lg = ctx.league
-    found = search.search(lg, ctx.me, give=give, position=pos, partners=partners,
-                          playoff_weighting=playoff_weighting,
-                          untradeable=_picked_up(waivers))  # fmt: skip
+    picked = _picked_up(waivers)
+    # The package generator, narrowed to the question (Oct 28, issue #2): every target
+    # passes the same minimum gain, trade-value check and acceptance grade as
+    # trade_packages, so the two never disagree on what's worth offering.
+    offers = packages.generate(lg, ctx.me, playoff_weighting=playoff_weighting,
+                               partners=partners, untradeable=picked, give=tuple(give),
+                               position=pos)  # fmt: skip
+    graded, near = [], []
+    for tid, offs in offers.items():
+        for o in offs:
+            (near if o.grade == packages.NEAR_MISS else graded).append((tid, o))
+    rank = lambda x: (GRADE_ORDER[x[1].grade], -x[1].mine)  # noqa: E731
+    graded.sort(key=rank)
+    near.sort(key=lambda x: -x[1].mine)
+    if not partners:  # league-wide: each team's best, so the list isn't one roster
+        seen: set[str] = set()
+        graded = [x for x in graded if not (x[0] in seen or seen.add(x[0]))]
     needs = search.needs(lg)
-    packages = []
-    for p in found:
-        res = _evaluate(ctx, p.partner, list(p.give), list(p.get), playoff_weighting)
-        res["shape"] = p.tags or ["straight swap"]
-        res["their_needs_filled"] = sorted(
-            {lg.players[k].position for k in p.give if needs[p.partner].get(
-                lg.players[k].position, 0) > 0})  # fmt: skip
-        packages.append(res)
+    items = [_offer_item(ctx, tid, o, needs, picked, playoff_weighting, full=True)
+             for tid, o in graded[:TARGETS_TOP]]  # fmt: skip
+    near_items = [_offer_item(ctx, tid, o, needs, picked, playoff_weighting, full=True)
+                  for tid, o in near[:TARGETS_NEAR]]  # fmt: skip
     mine = needs[ctx.me]
     return {
         "your_needs": {pos_: v for pos_, v in sorted(mine.items(), key=lambda kv: -kv[1])},
         "needs_note": "Points a week your starters at each position trail (+) or lead (-) the "
                       "league's middle team there, rest of season.",
-        "packages": packages,
+        "packages": items,
+        "near_misses": near_items,
+        "grades": GRADES_NOTE,
+        "acceptance_note": ACCEPTANCE_NOTE,
         "waiver_baseline": _waiver_dict(ctx, waivers, {ctx.me}),
         "searched": {"give": _names(lg, give), "position": pos,
                      "partner": lg.teams[partners[0]].name if partners else "every team",
-                     "rule": f"you gain at least {search.MY_MIN_GAIN} a week, they lose at most "
-                             f"{search.THEIR_MAX_LOSS} a week; up to {search.MAX_SIDE} a side"},
+                     "rule": "the package generator's checks (as trade_packages): your gain at "
+                             "least your_gain_needed, graded Long shot or better; best grade "
+                             f"first, then your gain; one per team unless a partner is named; "
+                             f"up to {search.MAX_SIDE} players a side"},
         "weeks": lg.weeks, "scoring": ctx.scoring, "as_of": ctx.as_of, "notes": ctx.notes,
     }  # fmt: skip
 
@@ -203,48 +269,13 @@ def trade_packages(con, db, row: LeagueRow, rules: ScoringRules, season: int, we
                                partners=partners, untradeable=picked)  # fmt: skip
     by_team, flat = [], []
     for tid, offs in offers.items():
-        items = []
-        for o in offs:
-            p = o.package
-            res = _evaluate(ctx, tid, list(p.give), list(p.get), playoff_weighting)
-            you, them = packages.reasons(lg, o, res, team_needs[tid])
-            item = {
-                "grade": o.grade, "grade_note": o.note,
-                "acceptance": {"score": round(o.score, 2), **o.parts},
-                "partner": lg.teams[tid].name,
-                "give": res["give"], "get": res["get"],
-                "you_per_week": round(o.mine, 2), "them_per_week": round(o.theirs, 2),
-                "you_playoff_weeks": res["you"]["playoff_weeks_change"],
-                "reasons_you": you, "reasons_them": them,
-                "what_they_see": _seen(lg, p.give, p.get, o.looks),
-                "shape": p.tags or ["straight swap"],
-                "playoff_odds": res["playoff_odds"],
-                **_moves(res["you"], picked, "you"), **_moves(res["them"], picked, "them"),
-                "verdict": res["verdict"], "p_ahead": res["p_ahead"],
-            }  # fmt: skip
-            items.append(item)
-            flat.append(item)
+        items = [_offer_item(ctx, tid, o, team_needs, picked, playoff_weighting) for o in offs]
+        flat += items
         by_team.append({"team": lg.teams[tid].name, "packages": items})
-    order = {g: i for i, g in enumerate((*packages.GRADES, packages.NEAR_MISS))}
-    flat.sort(key=lambda x: (order[x["grade"]], -x["you_per_week"]))
+    flat.sort(key=lambda x: (GRADE_ORDER[x["grade"]], -x["you_per_week"]))
     return {
-        "grades": {g: f"acceptance score at least {line} a week" for g, line in
-                   packages.THRESHOLDS} | {packages.NEAR_MISS: "missed a grade or a minimum by a "
-                                           "hair (see grade_note)"},  # fmt: skip
-        "acceptance_note": (
-            f"Acceptance score = their lineup change a week + {packages.LOOKS_WEIGHT} x how it "
-            "looks to them (perceived points a game they come out ahead) - "
-            f"{packages.CUT_WEIGHT} x perceived points a game of anyone they'd have to cut. "
-            f"Your side: every offer gains you at least max({packages.OFFER_MIN_GAIN}, "
-            f"{packages.VALUE_RATIO} x your_value_lost_per_week) a week, shown as "
-            f"your_gain_needed ({packages.LONG_SHOT_MY_GAIN} at least for a long shot). "
-            "your_value_lost_per_week is value over replacement you give minus what you get "
-            "(each player's points a week above the best free agent at his position, best "
-            "player first, depth counted less): above 0 you give more than you get, and "
-            "the gain you need rises; below 0 you get more. Less than the minimum gain is "
-            "within the model's noise. A scored grade, not a probability: there's no data "
-            "on offers turned down. Completed trades in the league are logged to check it "
-            "later."),
+        "grades": GRADES_NOTE,
+        "acceptance_note": ACCEPTANCE_NOTE,
         "by_team": by_team,
         "league_wide": flat,
         "waiver_baseline": _waiver_dict(ctx, waivers, {ctx.me}),

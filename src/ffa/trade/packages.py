@@ -162,9 +162,11 @@ class Offer:
 
 def generate(lg: League, me: str, *, playoff_weighting: bool = False,
              partners: list[str] | None = None,
-             untradeable: frozenset[str] = frozenset()) -> dict[str, list[Offer]]:  # fmt: skip
+             untradeable: frozenset[str] = frozenset(), give: tuple[str, ...] = (),
+             position: str | None = None) -> dict[str, list[Offer]]:  # fmt: skip
     """team -> its best offer in each grade (Likely first), you gaining in every one,
-    then its best near miss if one exists."""
+    then its best near miss if one exists. `give` / `position` narrow the search the way
+    the target search asks (your named players only; targets at one position)."""
     n = max(len(lg.weeks), 1)
     out: dict[str, list[Offer]] = {}
     for tid in lg.teams:
@@ -173,7 +175,8 @@ def generate(lg: League, me: str, *, playoff_weighting: bool = False,
         cands: dict[str, list[Offer]] = {}
         for p in team_pool(lg, me, tid, playoff_weighting=playoff_weighting,
                            max_loss=-THRESHOLDS[-1][1] + NEAR_SCORE,
-                           untradeable=untradeable):  # fmt: skip
+                           untradeable=untradeable, give=tuple(give),
+                           position=position):  # fmt: skip
             mine, theirs = p.mine / n, p.theirs / n
             sc, parts = acceptance(lg, p, theirs, untradeable)
             lost = trade_value(lg, p.give) - trade_value(lg, p.get)

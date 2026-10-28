@@ -120,11 +120,25 @@ def test_trade_targets_service_api_and_tool(trade_league, client):  # noqa: F811
     assert "QB" in r["your_needs"] and r["searched"]["partner"] == "every team"
     for p in r["packages"]:  # each one scored like evaluate_trade
         assert p["you"]["ros_change"] > 0 and "verdict" in p and p["shape"]
+        # Issue #2: the generator's checks, every time.
+        assert p["grade"] in ("Likely", "Fair", "Stretch", "Long shot")
+        assert p["you_per_week"] >= p["acceptance"]["your_gain_needed"]
+    assert all(p["grade"] == "Near miss" for p in r["near_misses"])
+    assert r["packages"], "the fixture has at least one offer worth making"
+    grades = [p["grade"] for p in r["packages"]]
+    order = ["Likely", "Fair", "Stretch", "Long shot"]
+    assert grades == sorted(grades, key=order.index)  # best grade first
+    # Nothing here that trade_packages wouldn't offer the same team.
+    pk_all = service.trade_packages(con, db_, row, from_sleeper(row.scoring), SEASON, WEEK,
+                                    fetch=_schedule)  # fmt: skip
+    offered = {(x["partner"], tuple(x["give"]), tuple(x["get"])) for x in pk_all["league_wide"]}
+    for p in r["packages"]:
+        assert (p["partner"], tuple(p["give"]), tuple(p["get"])) in offered
     api = client.post("/trade/targets", json={"league": "sleeper:1", "position": "QB"})
     assert api.status_code == 200, api.text
     pk = api.json()["packages"]
-    # Alpha (RB, 14) for Quinn (QB, 18) costs them 4 a week: past THEIR_MAX_LOSS, so no
-    # QB package is realistic in this two-team league.
+    # Alpha (RB, 14) for Quinn (QB, 18) costs them 4 a week: past the Long shot line, so
+    # no QB package is realistic in this two-team league.
     assert all(p["get"] == ["00-Q"] for p in pk) and len(pk) <= 1
     bad = client.post("/trade/targets", json={"league": "sleeper:1", "partner": "Nobody"})
     assert bad.status_code == 422 and "Theirs" in bad.text

@@ -106,3 +106,19 @@ def test_giving_away_trade_value_needs_a_bigger_gain():
     g, note = P.grade(2.70, -0.5, P.min_gain(11.0))  # 0.05 short: near miss, says why
     assert g == P.NEAR_MISS and "trade value you give up" in note
     assert P.grade(3.0, -0.5, P.min_gain(11.0))[0] == "Stretch"
+
+
+def test_generate_narrows_to_named_players_and_a_position():
+    """Issue #2: the target search is the generator narrowed to the question."""
+    lg = _league()
+    for p in lg.players.values():
+        vals = [v[0] for v in p.weekly.values()]
+        p.per_game = p.ppg = p.last3 = sum(vals) / len(vals)
+    wide = [o for offs in P.generate(lg, "me").values() for o in offs]
+    gives = {k for o in wide for k in o.package.give}
+    give = (sorted(gives)[0],)
+    narrowed = [o for offs in P.generate(lg, "me", give=give).values() for o in offs]
+    assert all(o.package.give == give for o in narrowed)
+    pos = lg.players[wide[0].package.get[0]].position
+    by_pos = [o for offs in P.generate(lg, "me", position=pos).values() for o in offs]
+    assert by_pos and all(lg.players[k].position == pos for o in by_pos for k in o.package.get)
