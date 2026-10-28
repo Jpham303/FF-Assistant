@@ -340,3 +340,29 @@ def test_a_backups_value_shows_in_the_reasons():
                       [*lg.teams["me"].roster, "WRFA"], set(), set(), False)  # fmt: skip
     assert any(x.startswith("WRFA (WR) as a backup") and x.endswith("+7.2 points")
                for x in side.reasons)  # fmt: skip
+
+
+def test_a_manager_keeps_an_injured_returning_backup_over_a_bench_body():
+    """Oct 27: GeumSon 'cut' Lamar Jackson (0.6 to their lineup behind Burrow, 93.7
+    points from his return) before anyone else."""
+    lg = _league()
+    them = lg.teams["them"]
+    lg.players["QBHURT"] = Player("QBHURT", "QBHURT", "QB",
+                                  {8: (0.0, 0.0), 9: (18.0, 5.0), 10: (18.0, 5.0)})  # fmt: skip
+    them.roster.append("QBHURT")  # behind QB2 (18): costs their lineup 0
+    them.size_limit = 7
+    # One more player arrives: the cut is WR6 (3 a week, never starts: cost 0 + 0.25 x
+    # 9 = 2.25), not QBHURT (cost 0 + 0.25 x 36 = 9).
+    _, drops, _ = core.balance(lg, them, [*them.roster, "RB3"], set(), set())
+    assert [d.key for d in drops] == ["WR6"]
+
+
+def test_your_trade_value_lost_is_reported():
+    lg = _league()
+    # QB1 (20 a week) for WR4 (11): you give up 9 a week of value.
+    r = core.evaluate(lg, "me", "them", give=["QB1"], get=["WR4"])
+    v = r["your_trade_value"]
+    assert (v["give_per_week"], v["get_per_week"], v["lost_per_week"]) == (20.0, 11.0, 9.0)
+    assert "flag" in v
+    # Depth counts less: RB2 (10) + RB3 (5) read as 10 + 0.3 x 5 = 11.5.
+    assert core.trade_value(lg, ["RB2", "RB3"]) == 11.5

@@ -77,7 +77,9 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    over the rest of the season (and in playoff weeks), the other team's change (is it
    realistic for them?), playoff odds before/after, any free agent added (by name, with
    his points) or player dropped, and the flags in how_it_looks. p_ahead is approximate
-   (players treated as independent); say so if it's near 50%. waiver_baseline lists free
+   (players treated as independent); say so if it's near 50%. If your_trade_value has a
+   flag, say how much rest-of-season value the user gives up: a lineup gain has to be
+   large to justify it. waiver_baseline lists free
    pickups the user (or they) could make right now without trading: the trade is scored
    after those, so mention them; they're worth doing either way.
 12. "Who should I target", "I need a RB, what's realistic", "what can I get for X":

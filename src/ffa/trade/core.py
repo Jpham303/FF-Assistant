@@ -242,6 +242,31 @@ def after_trade(team: Team, gave: tuple[str, ...] | list[str], got: tuple[str, .
     return roster, ir
 
 
+ASSET_WEIGHT = 0.25  # a cut weighs a player's rest-of-season points as an asset too
+
+
+def _cut_key(lg: League, lineup_cost: float, k: str) -> tuple[float, float]:
+    """Who a manager cuts: the least lineup cost plus ASSET_WEIGHT x rest-of-season
+    points. Lineup cost alone cut a team's injured, returning backup (Oct 27: Lamar
+    Jackson, 0.6 behind Burrow but 93.7 points from his return) before a bench body."""
+    ros = _ros(lg, k)
+    return (round(lineup_cost + ASSET_WEIGHT * ros, 6), ros)
+
+
+def trade_value(lg: League, keys: list[str] | tuple[str, ...]) -> float:
+    """A side's rest-of-season value a week: projected points a week, best player
+    first and depth counted less (1, 0.3, 0.15, 0.1), kickers and defenses at a tenth
+    (streamed). What you'd be giving up on the market, not just in your lineup."""
+    n = max(len(lg.weeks), 1)
+    vals = sorted(((lg.players[k].ros(lg.weeks) / n)
+                   * (STREAMABLE_SEEN if lg.players[k].position in STREAMABLE else 1.0)
+                   for k in keys if k in lg.players), reverse=True)  # fmt: skip
+    return sum(v * w for v, w in zip(vals, VALUE_WEIGHTS, strict=False))
+
+
+VALUE_WEIGHTS = (1.0, 0.3, 0.15, 0.1)
+
+
 def _ros(lg: League, k: str) -> float:
     p = lg.players.get(k)
     return p.ros(lg.weeks) if p else 0.0
@@ -259,7 +284,7 @@ def balance(lg: League, team: Team, after: list[str], ir_after: set[str],
     while team.counted(roster, ir_after) > limit:  # drop whoever costs the lineup least
         cost = drop_costs(lg, roster, [k for k in roster if k not in ir_after],
                           playoff_weighting)  # fmt: skip
-        k = min(cost, key=lambda x: (round(cost[x], 6), _ros(lg, x)))  # ties: fewest points
+        k = min(cost, key=lambda x: _cut_key(lg, cost[x], x))
         roster.remove(k)
         p = lg.players.get(k)
         drops.append(Move(k, p.name if p else k, p.position if p else "?", -cost[k]))
@@ -343,7 +368,7 @@ def with_waivers(lg: League, playoff_weighting: bool = False, protect: frozenset
             else:
                 cands = [k for k in roster if k not in protect and k not in team.ir]
                 cost = drop_costs(out, roster, cands, pw)
-                drops = sorted(cost, key=lambda x: (round(cost[x], 6), _ros(lg, x)))[:WAIVER_DROPS]
+                drops = sorted(cost, key=lambda x: _cut_key(out, cost[x], x))[:WAIVER_DROPS]
             best, best_gain = None, WAIVER_MIN * n
             for d in drops:
                 kept = [x for x in roster if x != d]
@@ -480,10 +505,21 @@ def evaluate(lg: League, me: str, partner: str, give: list[str], get: list[str],
         "verdict": verdict, "verdict_reason": why,
         "you": _side_dict(you, weeks), "them": _side_dict(them, weeks),
         "how_it_looks": looks,
+        "your_trade_value": _value_dict(lg, give, get),
         "p_ahead": round(p_ahead, 3),
         "weeks": lg.weeks, "playoff_weeks": sorted(lg.playoff_weeks),
         "playoff_weighting": playoff_weighting,
     }  # fmt: skip
+
+
+def _value_dict(lg: League, give, get) -> dict:
+    g, r = trade_value(lg, give), trade_value(lg, get)
+    out = {"give_per_week": round(g, 2), "get_per_week": round(r, 2),
+           "lost_per_week": round(g - r, 2)}  # fmt: skip
+    if g - r >= 3.0:
+        out["flag"] = (f"You give up {g - r:.1f} a week more rest-of-season value than you "
+                       "get: worth it only for a large lineup gain")  # fmt: skip
+    return out
 
 
 def _side_dict(s: Side, weeks: int) -> dict:

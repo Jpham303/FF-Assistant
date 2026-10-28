@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ffa.trade.core import CLOSE, STREAMABLE, STREAMABLE_SEEN, League, Player
+from ffa.trade.core import CLOSE, STREAMABLE, STREAMABLE_SEEN, League, Player, trade_value
 from ffa.trade.search import Package, team_pool
 
 GRADES = ("Likely", "Fair", "Stretch", "Long shot")
@@ -39,6 +39,7 @@ CUT_WEIGHT = 0.3  # cutting a real player hurts: Lamar Jackson (~18 a game) cost
 # it the 'gain' is within the model's noise, e.g. one week of flex shuffling (Oct 27).
 OFFER_MIN_GAIN = CLOSE
 LONG_SHOT_MY_GAIN = 1.0
+VALUE_RATIO = 0.25  # each point a week of trade value you give up needs 0.25 of gain
 NEAR_SCORE = 0.25  # within this of the next grade (or of Long shot): said, or kept
 NEAR_GAIN = 0.1  # within this under your minimum gain: kept as a near miss
 LOOKS_EVEN = 0.10  # for 'reads as': perceived values within 10% read as even
@@ -109,13 +110,24 @@ def acceptance(lg: League, p: Package, theirs: float,
                    "cut_players": [lg.players[k].name for k in cut]}  # fmt: skip
 
 
-def grade(mine: float, score: float) -> tuple[str | None, str | None]:
+def min_gain(value_lost: float) -> float:
+    """What an offer must gain you a week: OFFER_MIN_GAIN, or VALUE_RATIO x the trade
+    value you give away, whichever is more (Oct 27: Maye + Charbonnet for Hubbard gave
+    up ~11 a week of value for +1.29 and graded Stretch)."""
+    return max(OFFER_MIN_GAIN, VALUE_RATIO * value_lost)
+
+
+def grade(mine: float, score: float, need: float = OFFER_MIN_GAIN,
+          ) -> tuple[str | None, str | None]:  # fmt: skip
     """(grade, note): the grade, or NEAR_MISS when a minimum is missed by a hair, or
-    None; the note says how far from the next grade up (or the minimum) it is."""
-    if mine < OFFER_MIN_GAIN:
-        if mine >= OFFER_MIN_GAIN - NEAR_GAIN and score >= THRESHOLDS[-1][1]:
-            return NEAR_MISS, (f"your gain {mine:.2f} a week, {OFFER_MIN_GAIN - mine:.2f} "
-                               f"under the {OFFER_MIN_GAIN} minimum")  # fmt: skip
+    None; the note says how far from the next grade up (or the minimum) it is.
+    need: your minimum gain a week (min_gain)."""
+    if mine < need:
+        if mine >= need - NEAR_GAIN and score >= THRESHOLDS[-1][1]:
+            why = ("the minimum" if need == OFFER_MIN_GAIN
+                   else "what the trade value you give up needs")  # fmt: skip
+            return NEAR_MISS, (f"your gain {mine:.2f} a week, {need - mine:.2f} under {why} "
+                               f"({need:.2f})")  # fmt: skip
         return None, None
     for k, (g, cut) in enumerate(THRESHOLDS):
         if score < cut:
@@ -162,13 +174,15 @@ def generate(lg: League, me: str, *, playoff_weighting: bool = False,
                            untradeable=untradeable):  # fmt: skip
             mine, theirs = p.mine / n, p.theirs / n
             sc, parts = acceptance(lg, p, theirs, untradeable)
-            g, note = grade(mine, sc)
+            lost = trade_value(lg, p.give) - trade_value(lg, p.get)
+            g, note = grade(mine, sc, min_gain(lost))
             if g is None:
                 continue
             cur = best.get(g)
             if cur is None or (mine, sc) > (cur.mine, cur.score):
                 best[g] = Offer(g, p, mine, theirs, looks_for_them(lg, p.give, p.get), sc,
-                                parts, note)  # fmt: skip
+                                parts | {"your_value_lost_per_week": round(lost, 2)},
+                                note)  # fmt: skip
         out[tid] = [best[g] for g in (*GRADES, NEAR_MISS) if g in best]
     return out
 

@@ -94,3 +94,14 @@ def test_a_cut_costs_no_more_than_he_will_give_them():
     assert P.cut_value(lg, lg.players["QB2"]) == 0.6
     pk = Package("them", ("RB3",), ("WR4",), 0.0, 0.0, cuts=("QB2",))
     assert round(P.acceptance(lg, pk, 0.0)[1]["cuts"], 2) == -0.18  # 0.3 x 0.6
+
+
+def test_giving_away_trade_value_needs_a_bigger_gain():
+    """Oct 27: Maye + Charbonnet for Hubbard (~11 a week of value given up) graded
+    Stretch on a +1.29 lineup gain."""
+    assert P.min_gain(0.0) == P.OFFER_MIN_GAIN  # no value lost: the usual minimum
+    assert P.min_gain(11.0) == 2.75  # 0.25 x 11
+    assert P.grade(1.29, -0.5, P.min_gain(11.0)) == (None, None)  # far short: never
+    g, note = P.grade(2.70, -0.5, P.min_gain(11.0))  # 0.05 short: near miss, says why
+    assert g == P.NEAR_MISS and "trade value you give up" in note
+    assert P.grade(3.0, -0.5, P.min_gain(11.0))[0] == "Stretch"
