@@ -171,7 +171,10 @@ def team_pool(lg: League, me: str, tid: str, *, give: tuple[str, ...] = (),
     first = True
     for _ in range(2 * (MAX_SIDE - 1)):
         grown: list[Package] = []
-        width = SEEDS if first else CANDIDATES
+        # First step: every player of yours who'd help them is tried as a sweetener (Oct
+        # 27: Barkley, a sweetener that formed Jameson + Barkley for Hubbard, ranked
+        # outside the 12 who'd help GeumSon most).
+        width = len(gives) if first else CANDIDATES
         first = False
         for p in beam:
             adds_give = [] if fixed else [k for k in gives if k not in p.give]

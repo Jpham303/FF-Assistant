@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ffa.trade.core import CLOSE, STREAMABLE, STREAMABLE_SEEN, League, Player, trade_value
-from ffa.trade.search import Package, team_pool
+from ffa.trade.search import Package, _distinct, team_pool
 
 GRADES = ("Likely", "Fair", "Stretch", "Long shot")
 NEAR_MISS = "Near miss"
@@ -40,6 +40,8 @@ CUT_WEIGHT = 0.3  # cutting a real player hurts: Lamar Jackson (~18 a game) cost
 OFFER_MIN_GAIN = CLOSE
 LONG_SHOT_MY_GAIN = 1.0
 VALUE_RATIO = 0.25  # each point a week of trade value you give up needs 0.25 of gain
+PER_GRADE = 2  # offers per grade per team, each a different core deal (Oct 27: one slot
+# per grade hid Jameson + Barkley for Hubbard behind Barkley for Jones)
 NEAR_SCORE = 0.25  # within this of the next grade (or of Long shot): said, or kept
 NEAR_GAIN = 0.1  # within this under your minimum gain: kept as a near miss
 LOOKS_EVEN = 0.10  # for 'reads as': perceived values within 10% read as even
@@ -168,7 +170,7 @@ def generate(lg: League, me: str, *, playoff_weighting: bool = False,
     for tid in lg.teams:
         if tid == me or (partners and tid not in partners):
             continue
-        best: dict[str, Offer] = {}
+        cands: dict[str, list[Offer]] = {}
         for p in team_pool(lg, me, tid, playoff_weighting=playoff_weighting,
                            max_loss=-THRESHOLDS[-1][1] + NEAR_SCORE,
                            untradeable=untradeable):  # fmt: skip
@@ -178,12 +180,16 @@ def generate(lg: League, me: str, *, playoff_weighting: bool = False,
             g, note = grade(mine, sc, min_gain(lost))
             if g is None:
                 continue
-            cur = best.get(g)
-            if cur is None or (mine, sc) > (cur.mine, cur.score):
-                best[g] = Offer(g, p, mine, theirs, looks_for_them(lg, p.give, p.get), sc,
-                                parts | {"your_value_lost_per_week": round(lost, 2)},
-                                note)  # fmt: skip
-        out[tid] = [best[g] for g in (*GRADES, NEAR_MISS) if g in best]
+            cands.setdefault(g, []).append(Offer(
+                g, p, mine, theirs, looks_for_them(lg, p.give, p.get), sc,
+                parts | {"your_value_lost_per_week": round(lost, 2),
+                         "your_gain_needed": round(min_gain(lost), 2)}, note))  # fmt: skip
+        out[tid] = []
+        for g in (*GRADES, NEAR_MISS):
+            ranked = sorted(cands.get(g, []), key=lambda o: (-o.mine, -o.score))
+            keep = _distinct(lg, [o.package for o in ranked])
+            picked = [o for o in ranked if o.package in keep]
+            out[tid] += picked[: 1 if g == NEAR_MISS else PER_GRADE]
     return out
 
 

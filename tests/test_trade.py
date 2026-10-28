@@ -366,3 +366,21 @@ def test_your_trade_value_lost_is_reported():
     assert "flag" in v
     # Depth counts less: RB2 (10) + RB3 (5) read as 10 + 0.3 x 5 = 11.5.
     assert core.trade_value(lg, ["RB2", "RB3"]) == 11.5
+
+
+def test_trade_value_is_over_replacement():
+    """Oct 27: raw points made a backup QB with Mayfield on waivers look like 5 a week
+    of value."""
+    lg = _league()
+    lg.players["QBFA"] = _p("QBFA", "QB", 17)  # a free agent QB
+    lg.free_agents.append("QBFA")
+    core.with_streams(lg)  # sets each position's replacement level
+    assert core.over_replacement(lg, "QB1") == 3.0  # 20 - 17 a week
+    assert core.over_replacement(lg, "QB2") == 1.0  # 18 - 17
+    # RB replacement: RBBYE (9) in weeks 8 and 10, RBFA (7) in week 9 (RBBYE's bye).
+    assert core.over_replacement(lg, "RB1") == ((15 - 9) + (15 - 7) + (15 - 9)) / 3
+    # A player who never beats the waiver wire is worth 0, never less.
+    lg.players["QBBAD"] = _p("QBBAD", "QB", 12)
+    assert core.over_replacement(lg, "QBBAD") == 0.0
+    r = core.evaluate(lg, "me", "them", give=["QB1"], get=["WR4"])
+    assert "value over replacement" in r["your_trade_value"]["basis"]

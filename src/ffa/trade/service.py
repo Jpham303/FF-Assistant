@@ -235,10 +235,16 @@ def trade_packages(con, db, row: LeagueRow, rules: ScoringRules, season: int, we
             f"Acceptance score = their lineup change a week + {packages.LOOKS_WEIGHT} x how it "
             "looks to them (perceived points a game they come out ahead) - "
             f"{packages.CUT_WEIGHT} x perceived points a game of anyone they'd have to cut. "
-            f"Every offer gains you at least {packages.OFFER_MIN_GAIN} a week "
-            f"({packages.LONG_SHOT_MY_GAIN} for a long shot); less is within the model's "
-            "noise. A scored grade, not a probability: there's no data on offers turned "
-            "down. Completed trades in the league are logged to check it later."),
+            f"Your side: every offer gains you at least max({packages.OFFER_MIN_GAIN}, "
+            f"{packages.VALUE_RATIO} x your_value_lost_per_week) a week, shown as "
+            f"your_gain_needed ({packages.LONG_SHOT_MY_GAIN} at least for a long shot). "
+            "your_value_lost_per_week is value over replacement you give minus what you get "
+            "(each player's points a week above the best free agent at his position, best "
+            "player first, depth counted less): above 0 you give more than you get, and "
+            "the gain you need rises; below 0 you get more. Less than the minimum gain is "
+            "within the model's noise. A scored grade, not a probability: there's no data "
+            "on offers turned down. Completed trades in the league are logged to check it "
+            "later."),
         "by_team": by_team,
         "league_wide": flat,
         "waiver_baseline": _waiver_dict(ctx, waivers, {ctx.me}),

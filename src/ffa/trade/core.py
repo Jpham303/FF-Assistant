@@ -82,6 +82,9 @@ class League:
     # (position, week) -> the best free agent's expected points: kickers and defenses
     # are streamed, so a K or DEF slot is never worth less than this (see with_streams)
     stream: dict[tuple[str, int], float] = field(default_factory=dict)
+    # (position, week) -> best free agent's expected points: replacement level, for
+    # value over replacement (trade_value); set by with_streams
+    replacement: dict[tuple[str, int], float] = field(default_factory=dict)
     _cache: dict = field(default_factory=dict, repr=False, compare=False)
 
     def changed(self) -> None:
@@ -143,16 +146,17 @@ def with_streams(lg: League) -> League:
     at the position that week. Managers stream them, so trading for one is worth only
     what he beats the waiver wire by, week by week (Oct 27: packages padded with
     defenses read as real value)."""
-    lg.stream = {}
+    lg.stream, lg.replacement = {}, {}
     lg.changed()
     for k in lg.free_agents:
         p = lg.players.get(k)
-        if p is None or p.position not in STREAMABLE:
+        if p is None:
             continue
         for w in lg.weeks:
             e = p.weekly.get(w, (0.0, 0.0))[0]
-            if e > lg.stream.get((p.position, w), 0.0):
-                lg.stream[(p.position, w)] = e
+            if e > lg.replacement.get((p.position, w), 0.0):
+                lg.replacement[(p.position, w)] = e
+    lg.stream = {k: v for k, v in lg.replacement.items() if k[0] in STREAMABLE}
     return lg
 
 
@@ -253,14 +257,23 @@ def _cut_key(lg: League, lineup_cost: float, k: str) -> tuple[float, float]:
     return (round(lineup_cost + ASSET_WEIGHT * ros, 6), ros)
 
 
-def trade_value(lg: League, keys: list[str] | tuple[str, ...]) -> float:
-    """A side's rest-of-season value a week: projected points a week, best player
-    first and depth counted less (1, 0.3, 0.15, 0.1), kickers and defenses at a tenth
-    (streamed). What you'd be giving up on the market, not just in your lineup."""
+def over_replacement(lg: League, k: str) -> float:
+    """A player's value over replacement a week: what he scores each remaining week
+    above the best free agent at his position that week (0 in weeks he doesn't beat
+    the waiver wire, a bye included). Oct 27: raw points made a backup QB with
+    Mayfield on waivers look like 5 a week of value, and a QB's raw points misstate him
+    depending on how deep the position's waiver wire is."""
+    p = lg.players[k]
     n = max(len(lg.weeks), 1)
-    vals = sorted(((lg.players[k].ros(lg.weeks) / n)
-                   * (STREAMABLE_SEEN if lg.players[k].position in STREAMABLE else 1.0)
-                   for k in keys if k in lg.players), reverse=True)  # fmt: skip
+    return sum(max(0.0, p.weekly.get(w, (0.0, 0.0))[0]
+                   - lg.replacement.get((p.position, w), 0.0)) for w in lg.weeks) / n  # fmt: skip
+
+
+def trade_value(lg: League, keys: list[str] | tuple[str, ...]) -> float:
+    """A side's rest-of-season value a week: each player's value over replacement, best
+    player first and depth counted less (1, 0.3, 0.15, 0.1). What you'd be giving up
+    on the market, not just in your lineup."""
+    vals = sorted((over_replacement(lg, k) for k in keys if k in lg.players), reverse=True)
     return sum(v * w for v, w in zip(vals, VALUE_WEIGHTS, strict=False))
 
 
@@ -354,6 +367,7 @@ def with_waivers(lg: League, playoff_weighting: bool = False, protect: frozenset
         list(lg.free_agents),
         teams,
         dict(lg.stream),
+        dict(lg.replacement),
     )
     moves: list[Waiver] = []
     taken: set[str] = set()
@@ -517,8 +531,11 @@ def _value_dict(lg: League, give, get) -> dict:
     out = {"give_per_week": round(g, 2), "get_per_week": round(r, 2),
            "lost_per_week": round(g - r, 2)}  # fmt: skip
     if g - r >= 3.0:
-        out["flag"] = (f"You give up {g - r:.1f} a week more rest-of-season value than you "
+        out["flag"] = (f"You give up {g - r:.1f} a week more value over replacement than you "
                        "get: worth it only for a large lineup gain")  # fmt: skip
+    out["basis"] = ("value over replacement: each player's points a week above the best "
+                    "free agent at his position; best player first, depth counted less; "
+                    "lost_per_week > 0 means you give more than you get")  # fmt: skip
     return out
 
 

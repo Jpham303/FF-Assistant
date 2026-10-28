@@ -78,7 +78,8 @@ def test_generate_on_hand_built_rosters():
     assert offers, "RB3 for WR3 (+8 a week for you, even for them) at least"
     grades = [o.grade for o in offers]
     order = [*P.GRADES, P.NEAR_MISS]
-    assert grades == [g for g in order if g in grades]  # Likely first, one per grade
+    assert grades == sorted(grades, key=order.index)  # Likely first
+    assert all(grades.count(g) <= P.PER_GRADE for g in set(grades))  # up to 2 a grade
     for o in offers:
         assert o.mine >= P.OFFER_MIN_GAIN - P.NEAR_GAIN
         assert P.grade(o.mine, o.score)[0] == o.grade
