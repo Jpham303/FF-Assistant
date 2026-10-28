@@ -69,29 +69,84 @@ def as_of(f: Frames, season: int, week: int, *, mask_future_lines: bool) -> Fram
     )  # fmt: skip
 
 
+RESERVE_WORDS = ("IR", "PUP", "NA", "Sus", "DNR")
+STATUS_COLUMNS = ("key", "injury_status", "practice", "roster_status", "designation")
+
+
+def injury_contexts(con, season: int, week: int, keys: list[str]) -> dict[str, str]:
+    """key -> this season's injury story, from this week's latest projection inputs."""
+    from ffa.warehouse import duck
+
+    if not keys:
+        return {}
+    try:
+        t = duck.week(con, "projection_inputs", season, week)
+        if "injury_context" not in {r[0] for r in con.sql(f"describe {t}").fetchall()}:
+            return {}
+        ks = ", ".join("'" + k.replace("'", "''") + "'" for k in keys)
+        rows = con.sql(f"select key, injury_context from {t} where key in ({ks}) "
+                       "and injury_context is not null").fetchall()  # fmt: skip
+    except duck.MissingPartition:
+        return {}
+    return dict(rows)
+
+
+def status_fingerprint(con, season: int, week: int) -> str | None:
+    """A digest of where every player stands in this week's latest projection inputs
+    (designation, practice, roster status: nflverse and Sleeper combined). When it
+    changes, rest of season is stale: the weeks after this one take their chance to play
+    from today's standing (Oct 28: Lamar Jackson and Emeka Egbuka went Out -> Questionable
+    on Wednesday; the weeks after kept Tuesday's 'Out' odds). None: no projection yet."""
+    import hashlib
+
+    from ffa.warehouse import duck
+
+    try:
+        t = duck.week(con, "projection_inputs", season, week)
+    except duck.MissingPartition:
+        return None
+    have = {r[0] for r in con.sql(f"describe {t}").fetchall()}
+    cols = ", ".join(f"coalesce(cast({c} as varchar), '')" if c in have else "''"
+                     for c in STATUS_COLUMNS)  # fmt: skip
+    rows = con.sql(f"select {cols} from {t} order by 1").fetchall()
+    return hashlib.sha256(repr(rows).encode()).hexdigest()[:16]
+
+
 def standing(f: Frames, season: int, week: int) -> pl.DataFrame:
-    """key -> (cat, role) as of week `week`: latest roster status, this week's report."""
+    """key -> (cat, role, returning) as of week `week`: latest roster status, this week's
+    report. Last season's games lend a role to anyone with none yet this season."""
+    seasons = pl.col("season").is_between(season - 1, season)
     st = horizon._standing(
-        f.rosters.filter(pl.col("season") == season),
-        f.injuries.filter(pl.col("season") == season),
-        f.player_games.filter(pl.col("season") == season),
-    ).filter(pl.col("week") <= week)
-    return st.sort("week").group_by("key").last().select("key", "team", "cat", "role")
+        f.rosters.filter(seasons),
+        f.injuries.filter(seasons),
+        f.player_games.filter(seasons),
+    ).filter((pl.col("season") == season) & (pl.col("week") <= week))
+    return st.sort("week").group_by("key").last().select("key", "team", "cat", "role",
+                                                         "returning")  # fmt: skip
 
 
 def _with_current(st: pl.DataFrame, players: pl.DataFrame) -> pl.DataFrame:
     """Refine today's category with this week's inputs: the combined designation
-    (Sleeper included) and, before any designation, this week's chance to play (a player
-    who missed practice after being out is not healthy for the weeks after)."""
+    (Sleeper included), practice, and before any designation this week's chance to play
+    (a player who missed practice after being out is not healthy for the weeks after).
+    A fresh game designation beats a stale reserve listing (Oct 28: Charbonnet, off PUP
+    and Questionable, still read as 'reserve' from an older roster week)."""
+    cols = players.columns
     cur = players.select(
         "key", pl.col("injury_status").alias("_st"), pl.col("p_play").alias("_p"),
-        pl.col("roster_status").alias("_rs") if "roster_status" in players.columns
-        else pl.lit(None, pl.Utf8).alias("_rs"),
+        # Sleeper's own reserve word (IR, PUP...) counts even before nflverse's roster does.
+        pl.when(pl.col("designation").is_in(list(RESERVE_WORDS)) if "designation" in cols
+                else pl.lit(False)).then(pl.lit("RES"))
+        .otherwise(pl.col("roster_status") if "roster_status" in cols
+                   else pl.lit(None, pl.Utf8)).alias("_rs"),
+        (pl.col("practice") if "practice" in cols else pl.lit(None, pl.Utf8)).alias("_pr"),
     )  # fmt: skip
+    designated = pl.struct("_rs", "_st", "_pr").map_elements(
+        lambda x: horizon.category(x["_rs"], x["_st"], x["_pr"]), return_dtype=pl.Utf8
+    )
     cat = (
-        pl.when(pl.col("_rs") == "RES").then(pl.lit("reserve"))
-        .when(pl.col("_st").is_in(["Out", "Doubtful", "Questionable"]))
-        .then(pl.col("_st").str.to_lowercase())
+        pl.when(pl.col("_st").is_in(["Out", "Doubtful", "Questionable"]) | (pl.col("_rs") == "RES"))
+        .then(designated)
         .when(pl.col("_p") < 0.15).then(pl.lit("out"))
         .when(pl.col("_p") < 0.5).then(pl.lit("doubtful"))
         .when(pl.col("_p") < 0.95).then(pl.lit("questionable"))
@@ -102,7 +157,7 @@ def _with_current(st: pl.DataFrame, players: pl.DataFrame) -> pl.DataFrame:
         .with_columns(
             pl.when(pl.col("_p").is_not_null()).then(cat).otherwise(pl.col("cat")).alias("cat")
         )
-        .drop("_st", "_p", "_rs")
+        .drop("_st", "_p", "_rs", "_pr")
     )
 
 

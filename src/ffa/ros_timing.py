@@ -53,8 +53,8 @@ def main() -> None:
     q = lambda t: con.sql(f"select * from {t} where season <= {season}").pl()  # noqa: E731
     frames = ros.Frames(
         q("team_games"), q("player_games"),
-        con.sql(f"select * from rosters where season = {season}").pl(),
-        con.sql(f"select * from injuries where season = {season}").pl(),
+        con.sql(f"select * from rosters where season >= {season - 1}").pl(),
+        con.sql(f"select * from injuries where season >= {season - 1}").pl(),
         projections.latest_sleeper_status(con, season, week)[0],
     )  # fmt: skip
     models = projections.load_models(settings.models_dir)

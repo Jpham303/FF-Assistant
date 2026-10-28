@@ -116,6 +116,11 @@ def load_sleeper_players(client: httpx.Client | None = None) -> pl.DataFrame:
             if p.get("injury_start_date")
             else None,
             "practice_participation": p.get("practice_participation"),
+            # Sleeper's free-text injury note and roster listing ("Physically Unable to
+            # Perform", "Injured Reserve"...): context for the injury story (Oct 28).
+            "injury_notes": p.get("injury_notes"),
+            "listing": p.get("status"),
+            "practice_description": p.get("practice_description"),
             "news_updated": str(p["news_updated"]) if p.get("news_updated") else None,
         }
         for pid, p in data.items()

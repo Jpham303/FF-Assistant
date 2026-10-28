@@ -154,6 +154,11 @@ class Player(BaseModel):
         description="For a player who may not play: when to confirm he is active "
         "(inactives ~90 min before kickoff). Statuses are fetched once a day.",
     )
+    injury_context: str | None = Field(
+        None, description="This season's injury story: official reports and practice by "
+        "week, reserve-list weeks, this week's designation, the trend, whether the injury "
+        "predates the season, and Sleeper's note. Judge severity from this, not the body part",
+    )  # fmt: skip
     # Deprecated (one release): mean == expected_points; the rest include the zeros
     mean: float = Field(description="Deprecated: use expected_points")
     median: float = Field(description="Deprecated: all simulations, zeros included")
@@ -519,6 +524,8 @@ def rest_of_season(
         )  # fmt: skip
     snap = _unplayed(con, snap, season, w)
     rest = ros.summary(snap, ks, row.id if row is not None else None)
+    for k, ctx in ros.injury_contexts(con, season, w, list(rest)).items():
+        rest[k]["injury_context"] = ctx
     first = next(iter(rest.values()), {})
     return {
         "season": season, "from_week": w, "as_of": first.get("as_of"),

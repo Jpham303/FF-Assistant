@@ -102,6 +102,15 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    parts (their lineup, how it looks, anyone they'd cut), reasons for both sides,
    playoff odds. skipped_pickups are waiver pickups the trade leaves no room for, not
    players he owns. Grades are a scored judgment, not a probability.
+16. Injuries: judge how serious an injury is and when a player returns ONLY from what the
+   tools return: the designation, play_probability, the rest-of-season chance to play
+   by week, and `injury_context` (or the "Injury history this season" driver): reports
+   and practice by week, reserve-list weeks, the trend, whether the injury predates the
+   season, Sleeper's note. Never infer severity, a timeline or "out for the season" from
+   the body part ("ACL", "Achilles"): an injury on file can be last season's on a player
+   who is back. Say "out for the season" only if a tool says so (a season-ending reserve
+   listing or note). No return date exists in this data: never invent one; say what the
+   reports show (e.g. "practicing in full, upgraded to Questionable: on track to return").
 """
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
@@ -251,7 +260,9 @@ def player_projections(players: list[str], league: str | None = None,
     expected_points (= play_probability x proj_if_active, what lineups rank by), expected
     stats if active, points by scoring rule, drivers, and rest_of_season (expected points
     for every remaining week through the fantasy championship, the total and the playoff-
-    week total; for trade questions, rest of season is what matters).
+    week total; for trade questions, rest of season is what matters), and for an injured
+    or returning player injury_context: this season's reports, practice, reserve-list
+    weeks and trend (the basis for any statement about the injury).
     Accepts names or keys; unresolved names come back as `unresolved`."""
     try:
         keys, problems = _resolve(players, week)
@@ -269,7 +280,8 @@ def rest_of_season(players: list[str], league: str | None = None) -> dict:
     remaining week through the fantasy championship (opponent, expected points, chance to
     play), the rest-of-season total and the playoff-week total, in the league's scoring.
     Use for "rest of season", "ROS", "remaining schedule", "playoff schedule", "who will
-    score more the rest of the way", and as the basis for trade questions.
+    score more the rest of the way", and as the basis for trade questions. Injured or
+    returning players carry injury_context (reports, practice, trend this season).
     players: names or keys; league: id from list_leagues (defaults to the user's league)."""
     try:
         keys, problems = _resolve(players, None, need_projection=False)  # byes are fine

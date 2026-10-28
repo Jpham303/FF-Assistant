@@ -12,7 +12,16 @@ Role: "top" if he is a top producer at his position so far (top 12 QB/TE, top 36
 by fantasy points per game, 2+ games); else by his average share of offensive snaps in
 his earlier games that season: starter (70%+), role (30-70%), depth (under 30%). Top
 producers and starters miss far fewer games than part-timers, who also lose snaps to
-benchings and depth-chart changes.
+benchings and depth-chart changes. A player with no games yet this season (back from a
+long injury, a suspension) takes his role from last season (2+ games): Oct 28,
+Charbonnet, a 48%-snap back in 2025 returning from an ACL, read as "depth" and his
+chance of playing later games was cut by a quarter.
+
+Practice: an Out or Doubtful player who still practiced (limited or full) that week is
+its own category, "out_practicing" / "doubtful_practicing": in 2018-2025 he played his
+next game 43-57% of the time against 22-36% for one who didn't practice. A player on a
+reserve list with a game designation (designated to return, practicing) is categorised
+by the designation, not as "reserve".
 """
 
 from __future__ import annotations
@@ -43,19 +52,70 @@ def _ppg(player_games: pl.DataFrame) -> pl.DataFrame:
 
 MAX_K = 8  # games ahead; further out uses this row
 MIN_N = 30
-STATUSES = ("healthy", "questionable", "doubtful", "out", "inactive", "reserve")
+STATUSES = (
+    "healthy",
+    "questionable",
+    "doubtful",
+    "doubtful_practicing",
+    "out",
+    "out_practicing",
+    "inactive",
+    "reserve",
+)
+PRACTICING = ("Limited Participation in Practice", "Full Participation in Practice")
+MIN_PREV_GAMES = 2  # last season's games needed to lend him a role
 POSITIONS = ["QB", "RB", "WR", "TE"]
 
 
-def category(roster_status: str | None, report_status: str | None) -> str:
-    """Where a player stands today, from his roster status and this week's report."""
-    if roster_status == "RES":
-        return "reserve"
-    if report_status in ("Out", "Doubtful", "Questionable"):
-        return report_status.lower()
+def practiced(practice: str | None) -> bool:
+    """Limited or full participation (the official wording, or Sleeper's mapped to it)."""
+    return practice in PRACTICING
+
+
+def category(roster_status: str | None, report_status: str | None,
+             practice: str | None = None) -> str:  # fmt: skip
+    """Where a player stands today, from his roster status, this week's report and his
+    practice participation that week."""
+    if roster_status == "RES" and report_status not in ("Questionable", "Doubtful"):
+        # On a reserve list. Practicing while listed Out: designated to return.
+        return "out_practicing" if report_status == "Out" and practiced(practice) else "reserve"
+    if report_status in ("Out", "Doubtful"):
+        base = report_status.lower()
+        return f"{base}_practicing" if practiced(practice) else base
+    if report_status == "Questionable":
+        return "questionable"
     if roster_status == "INA":
         return "inactive"
     return "healthy"
+
+
+def _prior_role(rosters: pl.DataFrame, player_games: pl.DataFrame) -> pl.DataFrame:
+    """key, season -> last season's average snap share and whether he was a top producer
+    (2+ games), for players with no games yet this season."""
+    played = (pl.col("played").fill_null(False) if "played" in player_games.columns
+              else pl.col("snaps").fill_null(0) > 0)  # fmt: skip
+    g = player_games.filter(played)
+    cols = [c for c in _PTS if c in g.columns]
+    pts = sum((pl.col(c).fill_null(0) * w for c, w in _PTS.items() if c in cols), pl.lit(0.0))
+    per = g.group_by("key", "season").agg(
+        pl.col("snap_pct").fill_null(0).mean().alias("_prev_snap"),
+        pl.len().alias("_prev_gp"),
+        (pts.sum() / pl.len()).alias("_prev_ppg"),
+    ).filter(pl.col("_prev_gp") >= MIN_PREV_GAMES)  # fmt: skip
+    pos = (rosters.select("key", "season", pl.col("position").replace({"FB": "RB"}))
+           .unique(["key", "season"]))  # fmt: skip
+    per = per.join(pos, on=["key", "season"], how="left")
+    top = (
+        (pl.col("_prev_ppg").rank("ordinal", descending=True).over("season", "position")
+         <= pl.col("position").replace_strict(TOP_N, default=0))
+        if cols else pl.lit(False)
+    )  # fmt: skip
+    return per.with_columns(top.fill_null(False).alias("_prev_top")).select(
+        "key",
+        (pl.col("season") + 1).cast(pl.Int32).alias("season"),
+        "_prev_snap",
+        "_prev_top",
+    )
 
 
 def _standing(rosters: pl.DataFrame, injuries: pl.DataFrame,
@@ -70,16 +130,22 @@ def _standing(rosters: pl.DataFrame, injuries: pl.DataFrame,
     ).unique(["key", "season", "week"])  # fmt: skip
     inj = injuries.filter(pl.col("report_status").is_in(["Out", "Doubtful", "Questionable"]))
     inj = inj.select(
-        pl.col("gsis_id").alias("key"), "season", pl.col("week").cast(pl.Int32),
-        "report_status",
+        pl.col("gsis_id").alias("key"), pl.col("season").cast(pl.Int32),
+        pl.col("week").cast(pl.Int32), "report_status",
+        (pl.col("practice_status") if "practice_status" in inj.columns
+         else pl.lit(None, pl.Utf8)).alias("practice_status"),
     ).unique(["key", "season", "week"])  # fmt: skip
+    r = r.with_columns(pl.col("season").cast(pl.Int32))
+    played = (pl.col("played").fill_null(False) if "played" in player_games.columns
+              else pl.col("snaps").fill_null(0) > 0)  # fmt: skip
     role = (
-        player_games.sort("season", "week")
+        player_games.with_columns(pl.col("season").cast(pl.Int32)).sort("season", "week")
         .with_columns(
             (pl.col("snap_pct").fill_null(0).cum_sum() / pl.col("snap_pct").cum_count())
-            .over("key", "season").alias("avg_snap")
+            .over("key", "season").alias("avg_snap"),
+            played.cast(pl.Int32).cum_sum().over("key", "season").alias("_gp_season"),
         )
-        .select("key", "season", pl.col("week").cast(pl.Int32), "avg_snap")
+        .select("key", "season", pl.col("week").cast(pl.Int32), "avg_snap", "_gp_season")
     )  # fmt: skip
     s = r.join(inj, on=["key", "season", "week"], how="left").sort("week")
     s = s.join_asof(role.sort("week"), on="week", by=["key", "season"], strategy="backward",
@@ -95,15 +161,25 @@ def _standing(rosters: pl.DataFrame, injuries: pl.DataFrame,
         ).drop("_cum", "_gp")  # fmt: skip
     else:
         s = s.with_columns(pl.lit(False).alias("_top"))
+    # No games yet this season: last season's role (returning from injury, suspension).
+    pg = player_games.with_columns(pl.col("season").cast(pl.Int32))
+    s = s.join(_prior_role(rosters.select(
+        pl.col("gsis_id").alias("key"), pl.col("season").cast(pl.Int32), "position"),
+        pg), on=["key", "season"], how="left")  # fmt: skip
+    returning = (pl.col("_gp_season").fill_null(0) == 0) & pl.col("_prev_snap").is_not_null()
+    snap = pl.when(returning).then(pl.col("_prev_snap")).otherwise(pl.col("avg_snap"))
+    top = pl.when(returning).then(pl.col("_prev_top")).otherwise(pl.col("_top"))
     return s.with_columns(
-        pl.struct("roster_status", "report_status").map_elements(
-            lambda x: category(x["roster_status"], x["report_status"]), return_dtype=pl.Utf8
+        pl.struct("roster_status", "report_status", "practice_status").map_elements(
+            lambda x: category(x["roster_status"], x["report_status"], x["practice_status"]),
+            return_dtype=pl.Utf8,
         ).alias("cat"),
-        pl.when(pl.col("_top")).then(pl.lit("top"))
-        .when(pl.col("avg_snap").fill_null(0) >= FULL_TIME).then(pl.lit("starter"))
-        .when(pl.col("avg_snap").fill_null(0) >= STARTER_SNAP_PCT).then(pl.lit("role"))
+        pl.when(top.fill_null(False)).then(pl.lit("top"))
+        .when(snap.fill_null(0) >= FULL_TIME).then(pl.lit("starter"))
+        .when(snap.fill_null(0) >= STARTER_SNAP_PCT).then(pl.lit("role"))
         .otherwise(pl.lit("depth")).alias("role"),
-    )  # fmt: skip
+        returning.fill_null(False).alias("returning"),
+    ).drop("_prev_snap", "_prev_top", "_gp_season")  # fmt: skip
 
 
 def outcomes(rosters: pl.DataFrame, injuries: pl.DataFrame, player_games: pl.DataFrame,
@@ -130,7 +206,17 @@ def outcomes(rosters: pl.DataFrame, injuries: pl.DataFrame, player_games: pl.Dat
     return (
         nxt.join(played, on=["key", "season", "g_week"], how="left")
         .with_columns(pl.col("played").fill_null(False))
-        .select("key", "season", "week", "position", "cat", "role", "k", "played")
+        .select(
+            "key",
+            "season",
+            "week",
+            "position",
+            "cat",
+            "role",
+            "k",
+            "played",
+            *(["returning"] if "returning" in nxt.columns else []),
+        )
     )
 
 
@@ -151,8 +237,11 @@ def fit(rosters: pl.DataFrame, injuries: pl.DataFrame, player_games: pl.DataFram
 def p_play(table: dict[str, float], position: str, cat: str, role: str, k: int) -> float:
     """P(plays in his team's k-th game from now), k >= 1."""
     k = min(max(k, 1), MAX_K)
-    for key in (f"{position}|{cat}|{role}|{k}", f"any|{cat}|{role}|{k}", f"any|{cat}|any|{k}",
-                f"any|healthy|{role}|{k}"):  # fmt: skip
-        if key in table:
-            return table[key]
-    return 1.0
+    cats = [cat]
+    if cat.endswith("_practicing"):  # a thin cell falls back to the plain status
+        cats.append(cat.removesuffix("_practicing"))
+    for c in cats:
+        for key in (f"{position}|{c}|{role}|{k}", f"any|{c}|{role}|{k}", f"any|{c}|any|{k}"):
+            if key in table:
+                return table[key]
+    return table.get(f"any|healthy|{role}|{k}", 1.0)

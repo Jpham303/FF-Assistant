@@ -205,3 +205,39 @@ def test_rest_of_season_reruns_once_when_the_week_advances(wh, monkeypatch):
                          "expected_points": [1.0], "season": [SEASON], "week": [8]})  # fmt: skip
     store.write(snap, wh, ros.DATASET, volatile=True, ingested_at=datetime.now(UTC))
     assert runs() == []  # projected as of week 8: nothing to do
+
+
+def test_rest_of_season_reruns_when_a_status_changes(wh, monkeypatch):
+    """Oct 28: Wednesday's Out -> Questionable upgrades never reached the weeks after."""
+    from datetime import UTC, datetime
+
+    import dagster as dg
+
+    import dagster_defs as d
+    from ffa.service import projections as P
+    from ffa.warehouse import store
+
+    monkeypatch.setattr(d.settings, "warehouse_dir", str(wh))
+    monkeypatch.setattr(d.settings, "current_season", SEASON)
+    monkeypatch.setattr(P, "upcoming_week", lambda con, season: 8)
+
+    def inputs(status):
+        df = pl.DataFrame({"key": ["a", "b"], "injury_status": [status, None],
+                           "practice": [None, None], "roster_status": ["ACT", "ACT"],
+                           "designation": [status, None], "season": [SEASON] * 2,
+                           "week": [8, 8]})  # fmt: skip
+        store.write(df, wh, "projection_inputs", volatile=True, ingested_at=datetime.now(UTC))
+
+    def runs(cursor=None):
+        ctx = dg.build_sensor_context(cursor=cursor)
+        keys = [r.run_key for r in (d.ros_status_change(ctx) or [])]
+        return keys, ctx.cursor
+
+    assert runs() == ([], None)  # no projection yet
+    inputs("Out")
+    first, cur = runs()
+    assert len(first) == 1 and cur
+    assert runs(cur) == ([], cur)  # unchanged: nothing to do
+    inputs("Questionable")
+    again, cur2 = runs(cur)
+    assert len(again) == 1 and cur2 != cur and again != first

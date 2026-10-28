@@ -51,6 +51,7 @@ class Player:
     draft_pick: int | None = None
     draft_round: int | None = None
     injury: str | None = None
+    injury_context: str | None = None  # this season's injury story (ffa.model.injury_context)
 
     def ros(self, weeks: list[int]) -> float:
         return sum(self.weekly.get(w, (0.0, 0.0))[0] for w in weeks)

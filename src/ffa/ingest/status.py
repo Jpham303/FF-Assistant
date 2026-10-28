@@ -43,9 +43,12 @@ def sleeper_status(players: pl.DataFrame, crosswalk: pl.DataFrame,
     """One row per player Sleeper lists with a designation or practice note, keyed by
     gsis_id: status, practice, injury, source, updated_at (Sleeper's news time),
     fetched_at."""
-    p = players.filter(
-        pl.col("injury_status").is_not_null() | pl.col("practice_participation").is_not_null()
-    )
+    has = [
+        c
+        for c in ("injury_status", "practice_participation", "injury_notes")
+        if c in players.columns
+    ]
+    p = players.filter(pl.any_horizontal(pl.col(c).is_not_null() for c in has))
     if p.height == 0:
         return _empty()
     xw = crosswalk.select(pl.col("sleeper_id"), pl.col("gsis_id").alias("xw_gsis")).drop_nulls()
@@ -66,6 +69,9 @@ def sleeper_status(players: pl.DataFrame, crosswalk: pl.DataFrame,
             "source": SOURCE, "updated_at": upd, "fetched_at": fetched_at.astimezone(UTC),
             "designation": r["injury_status"],  # as Sleeper says it: IR, PUP, Out...
             "injury_since": (r.get("injury_start_date") or None),
+            "note": (r.get("injury_notes") or None),
+            # Only when it says something: "Active" is the default listing.
+            "listing": r.get("listing") if r.get("listing") not in (None, "Active") else None,
         })  # fmt: skip
     return pl.DataFrame(rows, schema=_SCHEMA) if rows else _empty()
 
@@ -76,6 +82,8 @@ _SCHEMA = {
     "fetched_at": pl.Datetime("us", "UTC"),
     "designation": pl.Utf8,  # the source's own word (Sleeper: IR, PUP, Sus...); status maps it
     "injury_since": pl.Utf8,  # ISO date the injury on file began, when the source says
+    "note": pl.Utf8,  # Sleeper's injury note (free text), when it has one
+    "listing": pl.Utf8,  # Sleeper's roster listing when not Active (Injured Reserve, PUP...)
 }  # fmt: skip
 
 
@@ -117,9 +125,18 @@ def combine(nflverse: pl.DataFrame, sleeper: pl.DataFrame | None) -> pl.DataFram
         .unique("key", keep="first", maintain_order=True)
         .select("key", pl.col("practice").alias("_note"))
     )
+    # Sleeper's note and listing whichever source's designation won.
+    extra = (allr.filter(pl.col("source") == SOURCE)
+             .select("key", pl.col("note").alias("_n"), pl.col("listing").alias("_l"))
+             .unique("key", keep="first"))  # fmt: skip
     return (
         best.join(note, on="key", how="left")
-        .with_columns(pl.coalesce("_note", "practice").alias("practice"))
-        .drop("_note")
+        .join(extra, on="key", how="left")
+        .with_columns(
+            pl.coalesce("_note", "practice").alias("practice"),
+            pl.coalesce("_n", "note").alias("note"),
+            pl.coalesce("_l", "listing").alias("listing"),
+        )  # fmt: skip
+        .drop("_note", "_n", "_l")
         .select(list(_SCHEMA))
     )

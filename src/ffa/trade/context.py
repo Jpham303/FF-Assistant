@@ -139,12 +139,15 @@ def _injuries(con, season: int, week: int, players: dict[str, core.Player]) -> N
                 players[r[0]].injury = r[1]
     try:
         t = duck.week(con, "projection_inputs", season, week)
-        rows = con.sql(f"select key, injury_status, roster_status from {t}").fetchall()
+        have = {r[0] for r in con.sql(f"describe {t}").fetchall()}
+        ctx = ", injury_context" if "injury_context" in have else ""
+        rows = con.sql(f"select key, injury_status, roster_status{ctx} from {t}").fetchall()
     except Exception:  # noqa: BLE001  (no projection yet)
         rows = []
-    for k, st, rs in rows:
+    for k, st, rs, *story in rows:
         if k not in players:
             continue
+        players[k].injury_context = story[0] if story else None
         if st:
             players[k].injury = st
         elif rs == "RES" and not players[k].injury:

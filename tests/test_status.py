@@ -423,3 +423,26 @@ def test_an_old_sleeper_injury_note_is_dated_not_presented_as_news():
     line = injury_line(base | {"injury_status": "Out", "designation": "PUP", "p_play": 0.0,
                                "injury_since": "2026-01-18"})  # fmt: skip
     assert line.startswith("Injury: OUT (PUP list) (knee - acl, from an earlier injury")
+
+
+def test_sleeper_note_and_listing_survive_even_when_nflverse_wins():
+    """Oct 28: Sleeper's note and roster listing are context for the injury story; they
+    stay with the player whichever source's designation is more severe."""
+    players = pl.DataFrame({
+        "sleeper_id": ["4866", "9"], "gsis_id": [None, None],
+        "injury_status": ["Questionable", None], "injury_body_part": ["Hamstring", None],
+        "practice_participation": [None, None],
+        "injury_notes": ["Limited Wednesday; expected to play", "Activated from PUP"],
+        "listing": ["Active", "Physically Unable to Perform"],
+        "news_updated": ["1792185120000"] * 2,
+    })  # fmt: skip
+    xw = pl.DataFrame({"sleeper_id": ["4866", "9"], "gsis_id": [BARKLEY, "00-IR"]})
+    sl = status.sleeper_status(players, xw, FETCHED)
+    by = {r["key"]: r for r in sl.iter_rows(named=True)}
+    assert by["00-IR"]["note"] == "Activated from PUP"  # a note alone is enough to keep him
+    assert by["00-IR"]["listing"] == "Physically Unable to Perform"
+    assert by[BARKLEY]["listing"] is None  # "Active" says nothing
+    inj = _injuries([(2026, 6, BARKLEY, "Doubtful", DNP, "Hamstring", "Hamstring")])
+    row = _statuses(inj, sl, 2026, 6).filter(pl.col("key") == BARKLEY).row(0, named=True)
+    assert row["injury_source"] == "nflverse"
+    assert row["note"] == "Limited Wednesday; expected to play"

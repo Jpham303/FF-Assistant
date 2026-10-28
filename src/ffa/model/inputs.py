@@ -14,6 +14,7 @@ import polars as pl
 
 from ffa.ingest import status as status_src
 from ffa.ingest.ids import TEAM_ALIASES
+from ffa.model import injury_context
 from ffa.model.asof import Decay, decayed, shrink
 from ffa.model.matchup import RATINGS, MatchupModel, defense_games, expectations
 from ffa.model.player import PlayerModel
@@ -267,7 +268,8 @@ def build(
     ]
     keep = [
         "key", "name", "team", "opponent", "game_id", "position", "roster_status",
-        "injury_status", "designation", "injury_since",
+        "injury_status", "designation", "injury_since", "note", "listing",
+        "injury_context", "returning",
         "practice", "injury", "injury_source", "injury_updated_at", "injury_fetched_at",
         "prev_out", "prev_status", "prev_week", "final_report", "report_published",
         "season_snap_pct", "m_tgt", "m_catch", "m_ypr", "m_ypc",
@@ -276,6 +278,13 @@ def build(
                              "ypr", "ypc", "adot", "int_rate", "scramble_rate", "fum_rate")],
         "tgt_share_w", "car_share_w", "db_share_w",
     ]  # fmt: skip
+    ctx = injury_context.contexts(
+        season=season, week=week, keys=players["key"].to_list(), injuries=injuries,
+        rosters=rosters, player_games=history,
+        current=players.select("key", "injury_status", "practice", "injury", "designation",
+                               "note", "listing", "injury_source"),
+    )  # fmt: skip
+    players = players.join(ctx, on="key", how="left")
     players = players.with_columns(pl.Series("p_play", p_play)).select(*keep, "p_play")
     return WeekInputs(season, week, teams, players)
 
@@ -306,6 +315,7 @@ def _statuses(injuries: pl.DataFrame, statuses: pl.DataFrame | None, season: int
         fetched.alias("fetched_at"),
         pl.col("report_status").replace({"Probable": None, "Note": None}).alias("designation"),
         pl.lit(None, pl.Utf8).alias("injury_since"),  # this week's official report
+        pl.lit(None, pl.Utf8).alias("note"), pl.lit(None, pl.Utf8).alias("listing"),
     ).filter(pl.col("key").is_not_null())  # fmt: skip
     nfl = nfl.unique("key", keep="last")
     combined = status_src.combine(nfl, statuses)

@@ -274,6 +274,7 @@ def _seen(lg: core.League, give, get, looks: float) -> dict:
         return {"name": p.name, "position": p.position, "ppg_so_far": p.ppg,
                 "last3": p.last3, "season_rank": p.season_rank, "draft_pick": p.draft_pick,
                 "injury": p.injury,
+                **({"injury_context": p.injury_context} if p.injury_context else {}),
                 "perceived_per_game": round(packages.perceived(p), 1)}  # fmt: skip
 
     return {"they_get": [card(k) for k in give], "they_give": [card(k) for k in get],

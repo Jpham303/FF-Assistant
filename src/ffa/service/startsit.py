@@ -102,6 +102,9 @@ class PlayerView:
     # For a player who may not play: when and where to confirm (statuses are fetched once
     # a day, so a later scratch isn't in the numbers).
     game_day_check: str | None = None
+    # This season's injury story: reports by week, practice, reserve list, trend (see
+    # ffa.model.injury_context). None for a player with nothing to report.
+    injury_context: str | None = None
     # upcoming / in_progress / final (kickoff + 4 h); None when the kickoff is unknown.
     # actual_points: what Sleeper has awarded so far (set by the API for league players).
     game_status: str | None = None
@@ -415,6 +418,8 @@ def drivers(row: dict, team: dict | None, position: str,
     line = injury_line(row)
     if line:
         out.append(line)
+    if row.get("injury_context"):
+        out.append(f"Injury history this season: {row['injury_context']}")
     out += _usage_lines(row, position, usage)
     if position == "QB" and row.get("db_share_s") is not None:
         out.append(f"Expected share of team dropbacks: {row['db_share_s'] * 100:.0f}%")
@@ -530,6 +535,7 @@ def player_views(w: Week, rules: ScoringRules) -> dict[str, PlayerView]:
                 float(sm["play_probability"]), row.get("injury_status"),
                 w.kickoffs.get(meta["team"])),
             game_status=gamestate.status(w.kickoffs.get(meta["team"])),
+            injury_context=row.get("injury_context"),
             mean=float(sm["expected_points"]), median=float(f.median()),
             p10=float(f.quantile(0.1)), p90=float(f.quantile(0.9)),
         )  # fmt: skip

@@ -599,8 +599,8 @@ def ros_projections(context: AssetExecutionContext) -> MaterializeResult:
     q = lambda t: con.sql(f"select * from {t} where season <= {season}").pl()  # noqa: E731
     frames = ros_mod.Frames(
         q("team_games"), q("player_games"),
-        con.sql(f"select * from rosters where season = {season}").pl(),
-        con.sql(f"select * from injuries where season = {season}").pl(),
+        con.sql(f"select * from rosters where season >= {season - 1}").pl(),
+        con.sql(f"select * from injuries where season >= {season - 1}").pl(),
         projections_mod.latest_sleeper_status(con, season, week)[0],
     )  # fmt: skip
     df = ros_mod.project(frames, projections_mod.load_models(settings.models_dir), table,
@@ -680,6 +680,26 @@ def ros_new_week(context: SensorEvaluationContext):
         return  # already projected as of this week
     except duck.MissingPartition:
         yield RunRequest(run_key=f"ros-new-week-{season}-{week}")
+
+
+@sensor(job=ros_job, minimum_interval_seconds=900,
+        default_status=DefaultSensorStatus.RUNNING)  # fmt: skip
+def ros_status_change(context: SensorEvaluationContext):
+    """Rest of season again whenever where players stand changes (a designation, practice
+    or roster move in this week's projection inputs), not only at 5:45 PM: the weeks after
+    this one take their chance to play from today's standing. Oct 28: Lamar Jackson and
+    Emeka Egbuka went Out -> Questionable on Wednesday, after Tuesday's run, and their
+    later weeks kept 'Out' odds (36% next week vs 73% this week)."""
+    con = duck.connect(settings.warehouse_dir)
+    season = settings.current_season
+    week = projections_mod.upcoming_week(con, season)
+    if week is None:
+        return
+    fp = ros_mod.status_fingerprint(con, season, week)
+    if fp is None or fp == context.cursor:
+        return
+    context.update_cursor(fp)
+    yield RunRequest(run_key=f"ros-status-{season}-{week}-{fp}")
 
 
 @asset(
@@ -923,5 +943,5 @@ defs = Definitions(
         daily_ros,
         weekly_tracking,
     ],
-    sensors=[pre_kickoff_snapshot, ros_new_week],
+    sensors=[pre_kickoff_snapshot, ros_new_week, ros_status_change],
 )

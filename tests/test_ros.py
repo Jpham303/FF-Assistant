@@ -74,6 +74,71 @@ def test_horizon_categories_and_fallbacks():
     assert horizon.p_play(t, "QB", "questionable", "starter", 1) == 0.9  # unknown cat: healthy
 
 
+LP, FP, DNP = (
+    "Limited Participation in Practice",
+    "Full Participation in Practice",
+    "Did Not Participate In Practice",
+)
+
+
+def test_practicing_and_designated_to_return_categories():
+    """Oct 28: Out-but-practicing players play their next game far more often; a reserve
+    player with a game designation (designated to return) goes by the designation."""
+    assert horizon.category("ACT", "Out", LP) == "out_practicing"
+    assert horizon.category("ACT", "Out", DNP) == "out"
+    assert horizon.category("ACT", "Doubtful", FP) == "doubtful_practicing"
+    assert horizon.category("ACT", "Questionable", DNP) == "questionable"
+    assert horizon.category("RES", "Questionable") == "questionable"
+    assert horizon.category("RES", "Out", FP) == "out_practicing"
+    assert horizon.category("RES", "Out", DNP) == "reserve"
+    t = {"any|out|starter|1": 0.35, "any|out_practicing|starter|1": 0.55}
+    assert horizon.p_play(t, "RB", "out_practicing", "starter", 1) == 0.55
+    assert horizon.p_play(t, "RB", "doubtful_practicing", "starter", 1) == 1.0  # no cell: healthy
+    assert horizon.p_play({"any|out|starter|2": 0.6}, "RB", "out_practicing", "starter", 2) == 0.6
+
+
+def test_returning_player_takes_last_seasons_role():
+    """Oct 28: Charbonnet (48% of snaps in 2025, no 2026 games yet) read as 'depth'."""
+
+    def ro(key, season, week, status="ACT"):
+        return {"gsis_id": key, "season": season, "week": week, "team": "SEA",
+                "position": "RB", "status": status}  # fmt: skip
+
+    rosters = pl.DataFrame(
+        [
+            ro("z", 2025, 1),
+            ro("z", 2025, 2),
+            ro("z", 2026, 1, "RES"),
+            ro("z", 2026, 7, "ACT"),
+            ro("k", 2026, 1),
+            ro("k", 2026, 7),
+        ]
+    )
+    pg = pl.DataFrame({
+        "key": ["z", "z", "k"], "season": [2025, 2025, 2026], "week": [1, 2, 1],
+        "snaps": [30, 30, 5], "snap_pct": [0.5, 0.5, 0.1], "played": [True, True, True],
+    })  # fmt: skip
+    inj = pl.DataFrame({"gsis_id": ["z"], "season": [2026], "week": [7],
+                        "report_status": ["Out"], "practice_status": [FP]})  # fmt: skip
+    st = horizon._standing(rosters, inj, pg).filter(pl.col("season") == 2026)
+    z = st.filter((pl.col("key") == "z") & (pl.col("week") == 7)).row(0, named=True)
+    assert (z["role"], z["returning"], z["cat"]) == ("role", True, "out_practicing")
+    k = st.filter((pl.col("key") == "k") & (pl.col("week") == 7)).row(0, named=True)
+    assert (k["role"], k["returning"]) == ("depth", False)  # has games: this season counts
+
+
+def test_fresh_designation_beats_a_stale_reserve_listing():
+    st = pl.DataFrame({"key": ["z", "i", "p"], "team": ["X"] * 3, "cat": ["reserve"] * 3,
+                       "role": ["role"] * 3})  # fmt: skip
+    players = pl.DataFrame({
+        "key": ["z", "i", "p"], "injury_status": ["Questionable", "Out", "Out"],
+        "practice": [None, None, FP], "p_play": [0.44, 0.0, 0.0],
+        "roster_status": ["RES", "ACT", "ACT"], "designation": ["Questionable", "IR", "Out"],
+    })  # fmt: skip
+    got = dict(ros._with_current(st, players).select("key", "cat").iter_rows())
+    assert got == {"z": "questionable", "i": "reserve", "p": "out_practicing"}
+
+
 def test_as_of_hides_results_rosters_and_future_lines():
     tg = _games().with_columns(pl.lit(30).alias("plays"))
     pg = pl.DataFrame({"key": ["p"] * 4, "season": [2026] * 4, "week": [1, 2, 3, 4]})
