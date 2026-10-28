@@ -351,11 +351,12 @@ def test_compact_output_is_short_and_keeps_what_decides(trade_league, client):  
                                               "compact": True, "top": 1}).json()  # fmt: skip
     assert "by_team" not in c and len(c["league_wide"]) == 1
     x = c["league_wide"][0]
-    assert {"grade", "give", "get", "you_per_week", "them_per_week", "acceptance",
+    assert {"grade", "give", "get", "you", "them", "acceptance",
             "reasons_you", "reasons_them"} <= set(x)  # fmt: skip
     assert "what_they_see" not in x and len(x["reasons_you"]) <= 2
     assert c["shown"].startswith(f"1 of {len(full['league_wide'])} offers")
-    # Oct 28: the change in playoff and title odds is written out, both teams.
-    for kind in ("playoff_odds", "title_odds"):
-        assert set(x[kind]) == {"you", "them"} and " pts)" in x[kind]["you"]
-        assert "% -> " in x[kind]["them"]
+    # Oct 28: both sides' gain or loss, the odds change written out.
+    first = full["league_wide"][0]
+    for who in ("you", "them"):
+        assert x[who]["per_week"] == first[f"{who}_per_week"]
+        assert " pts)" in x[who]["playoff_odds"] and "% -> " in x[who]["title_odds"]

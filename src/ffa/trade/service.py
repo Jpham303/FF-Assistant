@@ -389,30 +389,31 @@ def compact(payload: dict, top: int | None = COMPACT_TOP) -> dict:
     trade, both sides' change, the grade and its parts, 2 reasons a side, your playoff
     odds), and no per-team copy."""
 
-    def season_odds(block: dict | None) -> dict | None:
-        """{you, them} -> "before -> after (change)" in percent: the change written out,
-        so a chat client states it (Oct 28: offers showed before/after only, and the
-        change never reached the user)."""
-        if not block:
+    def pct(v: dict | None) -> str | None:
+        """ "before -> after (change)" in percent: the change written out, so a chat client
+        states it (Oct 28: offers showed before/after only, and it never reached the
+        user)."""
+        if not v or v.get("before") is None or v.get("after") is None:
             return None
-        out = {}
-        for side in ("you", "them"):
-            v = block.get(side)
-            if v and v.get("before") is not None and v.get("after") is not None:
-                b, a = 100 * v["before"], 100 * v["after"]
-                out[side] = f"{b:.1f}% -> {a:.1f}% ({a - b:+.1f} pts)"
-        return out or None
+        b, a = 100 * v["before"], 100 * v["after"]
+        return f"{b:.1f}% -> {a:.1f}% ({a - b:+.1f} pts)"
+
+    def side(x: dict, who: str) -> dict:
+        """One team's gain or loss, grouped (Oct 28: show both sides of every trade)."""
+        return {
+            "per_week": x[f"{who}_per_week"],
+            "playoff_odds": pct((x.get("playoff_odds") or {}).get(who)),
+            "title_odds": pct((x.get("title_odds") or {}).get(who)),
+        }
 
     def short(x: dict) -> dict:
         return {
             "grade": x["grade"], "grade_note": x.get("grade_note"),
             "partner": x["partner"], "give": x["give"], "get": x["get"],
-            "you_per_week": x["you_per_week"], "them_per_week": x["them_per_week"],
+            "you": side(x, "you"), "them": side(x, "them"),
             "acceptance": x.get("acceptance"),
             "reads_as": (x.get("what_they_see") or {}).get("reads_as"),
             "reasons_you": x["reasons_you"][:2], "reasons_them": x["reasons_them"][:2],
-            "playoff_odds": season_odds(x.get("playoff_odds")),
-            "title_odds": season_odds(x.get("title_odds")),
             "shape": x.get("shape"),
             "cuts_them": [d["name"] for d in x.get("drops_them", [])],
             "drops_you": [d["name"] for d in x.get("drops_you", [])],

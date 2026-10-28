@@ -114,12 +114,14 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    who is back. Say "out for the season" only if a tool says so (a season-ending reserve
    listing or note). No return date exists in this data: never invent one; say what the
    reports show (e.g. "practicing in full, upgraded to Questionable: on track to return").
-17. Every trade, every tool: state its playoff_odds and title_odds change for the user
-   (and the other team when it matters), e.g. "+1.2 a week: playoff odds 54% -> 61%,
-   title odds 9% -> 12%". Compact output writes each as "before -> after (change)"; the
-   full form has before, after and change. Title odds simulate the league's bracket
-   (seeding, byes, round lengths). If title_odds is null, say it's unavailable and why
-   (notes). Never leave these out.
+17. Every trade, every tool: show BOTH sides' gain or loss, never only the user's: points
+   a week, playoff odds change and title odds change, for the user and for the other
+   team, e.g. a two-row table (You | Them) or "You: +1.2 a week, playoffs 54% -> 61%,
+   title 9% -> 12%. Them: -0.4 a week, playoffs 40% -> 37%, title 5% -> 4%". Compact
+   offers group these under `you` and `them`; the full form has per_week (you_per_week /
+   them_per_week), playoff_odds and title_odds (before, after, change). Title odds
+   simulate the league's bracket (seeding, byes, round lengths). If title_odds is null,
+   say it's unavailable and why (notes).
 """
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
