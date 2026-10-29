@@ -123,6 +123,12 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    them_per_week), playoff_odds and title_odds (before, after, change). Title odds
    simulate the league's bracket (seeding, byes, round lengths). If title_odds is null,
    say it's unavailable and why (notes).
+18. Trades from trade_packages and trade_targets are ALTERNATIVES, each scored on its own
+   against the user's current roster (after the free waiver moves): never present them
+   as a sequence ("do this, then that"), never combine two, and never assume a player
+   from one trade is available for another. Offers can share players for that reason.
+   Generated trades send up to 3 players and receive up to 2; a trade the user names in
+   evaluate_trade can be any size.
 """
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
