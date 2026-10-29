@@ -10,14 +10,17 @@ Acceptance score, in points a week (the grade's inputs, weighed as the spec list
 
     their stakes x their lineup change
     + LOOKS_WEIGHT x (what they get - what they give, perceived points a game)
+    + THEIR_VALUE_WEIGHT x (value over replacement they get - they give, a week)
     - CUT_WEIGHT x (perceived points a game of anyone they'd have to cut)
 
 Grades by score (a scored grade, not a probability: no data exists on offers turned
 down): Likely >= 1.0, Fair >= 0, Stretch >= -1.0, Long shot >= -3.0. Every offer gains
 you at least OFFER_MIN_GAIN a week (LONG_SHOT_MY_GAIN for long shots).
 
-"What managers see" (perceived points a game): points per game so far in the league's
-scoring and over the last 3 games, discounted for injury status, kickers and defenses
+"What managers see" (perceived points a game): half what he has done (points per game so
+far in the league's scoring, 60%, and over the last 3 games, 40%) and half what he
+projects a game the rest of the way (managers see rest-of-season rankings; Oct 29: a
+top-20 WR on a cold streak read as 7 a game), discounted for injury status, kickers and defenses
 at a tenth (streamed), with a small premium for an early pick in the league's draft
 (name value). A side's players are weighted best first (STUD_WEIGHTS: depth is worth
 less than one better player), so a 2-for-1 consolidation reads as managers read it.
@@ -34,6 +37,12 @@ GRADES = ("Likely", "Fair", "Stretch", "Long shot")
 NEAR_MISS = "Near miss"
 THRESHOLDS = (("Likely", 1.0), ("Fair", 0.0), ("Stretch", -1.0), ("Long shot", -3.0))
 LOOKS_WEIGHT = 0.3  # a perceived point a game they come out ahead = 0.3 a week of score
+# Their trade value (Oct 29): a point a week of value over replacement they give up
+# costs 0.5 of score, not discounted by stakes (value is what a seller weighs). Without
+# it, Antonio Williams + Jameson Williams for Derrick Henry + Michael Wilson graded
+# Stretch against an all-but-eliminated team (4 a week of value given away).
+THEIR_VALUE_WEIGHT = 0.5
+PAST_WEIGHT = 0.5  # perceived value: half past results, half rest-of-season projection
 CUT_WEIGHT = 0.3  # cutting a real player hurts: Lamar Jackson (~18 a game) costs ~5.4
 # An offer must gain you what a trade check calls a gain (core.CLOSE, 0.5 a week): under
 # it the 'gain' is within the model's noise, e.g. one week of flex shuffling (Oct 27).
@@ -67,8 +76,10 @@ def perceived(p: Player) -> float:
     if p.ppg is None:  # no games yet (rookie, injured all year): the projection is all
         base = p.per_game or 0.0  # anyone has to go on
     else:
-        base = SEASON_WEIGHT * p.ppg + LAST3_WEIGHT * (p.last3 if p.last3 is not None
+        past = SEASON_WEIGHT * p.ppg + LAST3_WEIGHT * (p.last3 if p.last3 is not None
                                                         else p.ppg)  # fmt: skip
+        base = (past if p.per_game is None
+                else PAST_WEIGHT * past + (1 - PAST_WEIGHT) * p.per_game)  # fmt: skip
     base *= INJURY_FACTOR.get(p.injury or "", 1.0)
     if p.position in STREAMABLE:  # kickers and defenses are streamed: little trade value
         base *= STREAMABLE_SEEN
@@ -111,10 +122,14 @@ def acceptance(lg: League, p: Package, theirs: float,
     looks_pts = side_value(lg, p.give) - side_value(lg, p.get)
     cut = [k for k in p.cuts if k not in untradeable and k in lg.players]
     cut_pts = sum(cut_value(lg, lg.players[k]) for k in cut)
-    score = stakes * theirs + LOOKS_WEIGHT * looks_pts - CUT_WEIGHT * cut_pts
+    value_pts = trade_value(lg, p.give) - trade_value(lg, p.get)  # what they gain
+    score = (stakes * theirs + LOOKS_WEIGHT * looks_pts + THEIR_VALUE_WEIGHT * value_pts
+             - CUT_WEIGHT * cut_pts)  # fmt: skip
     return score, {"their_lineup": round(theirs, 2),
                    "their_stakes": round(stakes, 2),
                    "their_lineup_weighted": round(stakes * theirs, 2),
+                   "their_value": round(THEIR_VALUE_WEIGHT * value_pts, 2),
+                   "their_value_change_per_week": round(value_pts, 2),
                    "how_it_looks": round(LOOKS_WEIGHT * looks_pts, 2),
                    "cuts": round(-CUT_WEIGHT * cut_pts, 2),
                    "cut_players": [lg.players[k].name for k in cut]}  # fmt: skip

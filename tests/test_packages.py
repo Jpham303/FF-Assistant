@@ -14,9 +14,13 @@ def _seen(key, ppg, last3=None, rnd=None, injury=None, per_game=10.0):
 
 
 def test_what_managers_see():
-    assert P.perceived(_seen("a", 10.0, 15.0)) == 0.6 * 10 + 0.4 * 15  # 12.0
+    # Half what he's done (0.6 x season + 0.4 x last 3 = 12), half his projection (10).
+    assert P.perceived(_seen("a", 10.0, 15.0)) == 0.5 * (0.6 * 10 + 0.4 * 15) + 0.5 * 10
     assert P.perceived(_seen("a", 10.0)) == 10.0  # no last-3: season rate
     assert P.perceived(_seen("a", None, per_game=8.0)) == 8.0  # no games: the projection
+    # Oct 29: Michael Wilson, 9.1 so far, 6.4 lately, projects 12.1: ~10, not 8.
+    assert round(P.perceived(_seen("w", 9.1, 6.4, per_game=12.1)), 2) == 10.06
+    assert P.perceived(_seen("a", 10.0, 15.0, per_game=None)) == 12.0  # no projection
     assert P.perceived(_seen("a", 10.0, 10.0, injury="Out")) == 3.0
     assert round(P.perceived(_seen("a", 10.0, 10.0, rnd=2)), 6) == 11.0  # early pick +10%
     assert round(P.perceived(_seen("a", 10.0, 10.0, rnd=5)), 6) == 10.5
@@ -55,17 +59,20 @@ def test_how_it_looks_and_cuts_move_the_score():
         lg.players[k].ppg, lg.players[k].last3 = v, v
     from ffa.trade.search import Package
 
-    # They give WR4 (11) for RB3 (5): looks -6 a game -> -1.8 a week of score.
+    # They give WR4 (11) for RB3 (5): looks -6 a game -> -1.8 a week of score. Oct 29:
+    # and they give up 6 a week of value over replacement (no free agents in this
+    # league: replacement 0) -> -3.0. Score 0.5 - 1.8 - 3.0 = -4.3.
     pk = Package("them", ("RB3",), ("WR4",), 0.0, 0.0)
     sc, parts = P.acceptance(lg, pk, theirs=0.5)
-    assert round(parts["how_it_looks"], 2) == -1.8 and round(sc, 2) == -1.3
+    assert round(parts["how_it_looks"], 2) == -1.8 and parts["their_value"] == -3.0
+    assert parts["their_value_change_per_week"] == -6.0 and round(sc, 2) == -4.3
     # The same, but they have to cut QB2 (18 a game): another -5.4.
     pk.cuts = ("QB2",)
     sc2, parts2 = P.acceptance(lg, pk, theirs=0.5)
-    assert round(parts2["cuts"], 2) == -5.4 and round(sc2, 2) == -6.7
+    assert round(parts2["cuts"], 2) == -5.4 and round(sc2, 2) == -9.7
     assert parts2["cut_players"] == ["QB2"]
     # A cut that's only the baseline's pickup costs nothing: they never had him.
-    assert round(P.acceptance(lg, pk, 0.5, frozenset({"QB2"}))[0], 2) == -1.3
+    assert round(P.acceptance(lg, pk, 0.5, frozenset({"QB2"}))[0], 2) == -4.3
 
 
 def test_generate_on_hand_built_rosters():
@@ -163,3 +170,17 @@ def test_best_trades_first_likely_then_the_rest_by_title_odds():
     got = [(x["grade"], x["you_per_week"]) for x in sorted(items, key=P.item_rank)]
     assert got == [("Likely", 0.5), ("Likely", 0.6), ("Long shot", 2.0), ("Fair", 1.2),
                    ("Fair", 1.0), ("Stretch", 1.5), ("Near miss", 3.0)]  # fmt: skip
+
+
+def test_their_value_loss_is_not_discounted_by_stakes():
+    """Oct 29: an all-but-eliminated team (stakes 0.13) still won't give away value:
+    Antonio Williams + Jameson Williams for Derrick Henry + Michael Wilson graded Stretch."""
+    from ffa.trade.search import Package
+
+    lg = _league()
+    for k, v in (("RB3", 5.0), ("WR4", 11.0)):
+        lg.players[k].ppg, lg.players[k].last3 = v, v
+    pk = Package("them", ("RB3",), ("WR4",), 0.0, 0.0)
+    seller, parts = P.acceptance(lg, pk, theirs=-3.0, stakes=0.0)
+    assert parts["their_lineup_weighted"] == 0.0 and parts["their_value"] == -3.0
+    assert round(seller, 2) == -4.8 and P.grade(2.0, seller)[0] is None  # not an offer

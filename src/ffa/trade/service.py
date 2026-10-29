@@ -122,7 +122,10 @@ GRADES_NOTE = {g: f"acceptance score at least {line} a week" for g, line in
 ACCEPTANCE_NOTE = (
     "Acceptance score = their stakes (see `stakes`) x their lineup change a week + "
     f"{packages.LOOKS_WEIGHT} x how it "
-    "looks to them (perceived points a game they come out ahead) - "
+    "looks to them (perceived points a game they come out ahead: half past results, half "
+    "rest-of-season projection) + "
+    f"{packages.THEIR_VALUE_WEIGHT} x the value over replacement they gain a week "
+    "(negative when they give more than they get; not discounted by stakes) - "
     f"{packages.CUT_WEIGHT} x perceived points a game of anyone they'd have to cut. "
     f"Your side: every offer gains you at least max({packages.OFFER_MIN_GAIN}, "
     f"{packages.VALUE_RATIO} x your_value_lost_per_week) a week, shown as "
@@ -394,7 +397,7 @@ DATASET = "trade_packages"  # precomputed daily after rest of season
 # Bumped when an offer gains fields the tools rely on: a saved run in an older format is
 # recomputed instead of served (Oct 28: a board saved before title odds existed showed
 # none until the next daily run).
-PAYLOAD_VERSION = 5  # 3: stakes; 4: keys, usable value (cards); 5: best-first ranking
+PAYLOAD_VERSION = 6  # 3: stakes; 4: cards; 5: best-first ranking; 6: their value
 
 
 def save_all(warehouse_dir, season: int, week: int, payloads: dict[str, dict],
