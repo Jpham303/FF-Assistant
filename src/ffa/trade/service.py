@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import polars as pl
+
 from ffa.db.models import LeagueRow
 from ffa.scoring.rules import ScoringRules
 from ffa.trade import context, core, packages, playoffs, search
@@ -99,7 +101,16 @@ def _evaluate(ctx: context.Context, partner: str, give: list[str], get: list[str
     else:
         res["playoff_odds"] = None
         res["title_odds"] = None
+    before = core.usable_value(lg, lg.teams[ctx.me].roster)
+    after = core.usable_value(lg, res["you"]["roster_after"])
+    res["usable_value"] = {
+        "before_per_week": round(before, 1), "after_per_week": round(after, 1),
+        "change_pct": round(100 * (after - before) / before, 1) if before > 0 else None,
+        "basis": "your starters' points a week above the best free agent at each "
+                 "position (bench depth doesn't count)",
+    }  # fmt: skip
     res["give"], res["get"] = _names(lg, give), _names(lg, get)
+    res["give_keys"], res["get_keys"] = list(give), list(get)
     for side in ("you", "them"):
         res[side].pop("roster_after", None)
     return res
@@ -141,6 +152,7 @@ def _offer_item(ctx: context.Context, tid: str, o: packages.Offer, team_needs: d
         "acceptance": {"score": round(o.score, 2), **o.parts},
         "partner": lg.teams[tid].name,
         "give": res["give"], "get": res["get"],
+        "give_keys": res["give_keys"], "get_keys": res["get_keys"],
         "you_per_week": round(o.mine, 2), "them_per_week": round(o.theirs, 2),
         "you_playoff_weeks": res["you"]["playoff_weeks_change"],
         "reasons_you": you, "reasons_them": them,
@@ -150,6 +162,7 @@ def _offer_item(ctx: context.Context, tid: str, o: packages.Offer, team_needs: d
                                       if team_needs[tid].get(lg.players[k].position, 0) > 0}),
         "playoff_odds": res["playoff_odds"],
         "title_odds": res["title_odds"],
+        "usable_value": res["usable_value"],
         **_moves(res["you"], picked, "you"), **_moves(res["them"], picked, "them"),
         "verdict": res["verdict"], "p_ahead": res["p_ahead"],
         # Target search: both sides in full, like evaluate_trade (trade_packages keeps
@@ -377,7 +390,7 @@ DATASET = "trade_packages"  # precomputed daily after rest of season
 # Bumped when an offer gains fields the tools rely on: a saved run in an older format is
 # recomputed instead of served (Oct 28: a board saved before title odds existed showed
 # none until the next daily run).
-PAYLOAD_VERSION = 3  # 3: stakes-weighted acceptance
+PAYLOAD_VERSION = 4  # 3: stakes-weighted acceptance; 4: keys, usable value (cards)
 
 
 def save_all(warehouse_dir, season: int, week: int, payloads: dict[str, dict],
@@ -413,6 +426,56 @@ def saved_packages(con, league_id: str, season: int, week: int) -> dict | None:
     if payload.get("payload_version", 1) < PAYLOAD_VERSION:
         return None  # an older format: recompute
     return payload | {"precomputed_at": str(rows[0][1])}
+
+
+def trade_cards(con, db, row: LeagueRow, rules: ScoringRules, season: int, week: int,
+                position: str | None = None, top: int = 8, refresh: bool = False,
+                now: datetime | None = None, fetch=None) -> dict:  # fmt: skip
+    """Trade cards (Oct 29): the package generator's offers seen from the players you'd
+    get, best target first. Built from the saved trade_packages run (or a fresh one)."""
+    from ffa.scoring import score
+    from ffa.trade import cards
+
+    payload = None if refresh else saved_packages(con, row.id, season, week)
+    if payload is None:
+        payload = trade_packages(con, db, row, rules, season, week, now=now, fetch=fetch)
+    ctx = context.build(con, db, row, rules, season, week, now=now, fetch=fetch)
+    lg = ctx.league
+    owners = {k: t.name for tid, t in lg.teams.items() if tid != ctx.me for k in t.roster}
+    notes = list(payload.get("notes", []))
+    try:
+        pg = score(con.sql(f"select * from player_games where season between "
+                           f"{int(season) - 1} and {int(season)}").pl(), rules)  # fmt: skip
+        tg = con.sql(f"select * from team_games where season = {int(season)}").pl()
+    except Exception as exc:  # noqa: BLE001  (said in the notes, never silently)
+        notes.append(f"Game logs unavailable ({type(exc).__name__}): cards leave out schedule "
+                     "rank, last box score and recent usage.")  # fmt: skip
+        pg = pl.DataFrame(schema={"key": pl.Utf8, "season": pl.Int32, "week": pl.Int32,
+                                  "position": pl.Utf8, "fpts": pl.Float64})  # fmt: skip
+        tg = pl.DataFrame(schema={"season": pl.Int32, "week": pl.Int32, "team": pl.Utf8,
+                                  "opponent": pl.Utf8, "game_type": pl.Utf8})  # fmt: skip
+    built = cards.build(lg, payload.get("league_wide", []), pg, tg, season, week,
+                        owners=owners, last_week=max(lg.weeks) if lg.weeks else week,
+                        position=position.upper() if position else None, top=top)  # fmt: skip
+    return {
+        "cards": built,
+        "how_to_read": CARDS_NOTE,
+        "stakes": payload.get("stakes"),
+        "as_of": payload.get("as_of"), "precomputed_at": payload.get("precomputed_at"),
+        "generated_at": payload.get("generated_at"), "notes": notes,
+    }  # fmt: skip
+
+
+CARDS_NOTE = (
+    "One card per player you could get, best first (by your title-odds gain in his best "
+    "deal). deals: offers that bring him in; could_say_yes: those graded Likely or Fair. "
+    "confidence: 1-5 from p_ahead, your chance of coming out ahead over the rest of the "
+    "season (5: 90%+, 4: 75-90%, 3: 60-75%, 2: 50-60%, 1: under 50%). acceptance: the "
+    "grade in words (likely, plausible, a stretch, a long shot). playoff_points_per_week: "
+    "your lineup change a week in the fantasy playoff weeks. usable_value_change_pct: "
+    "change in your starters' points a week above the best free agent at each position. "
+    "Each deal is an alternative scored on its own."
+)
 
 
 COMPACT_TOP = 12

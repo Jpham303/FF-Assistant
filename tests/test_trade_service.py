@@ -365,3 +365,38 @@ def test_compact_output_is_short_and_keeps_what_decides(trade_league, client):  
     for who in ("you", "them"):
         assert x[who]["per_week"] == first[f"{who}_per_week"]
         assert " pts)" in x[who]["playoff_odds"] and "% -> " in x[who]["title_odds"]
+
+
+def test_trade_cards_service_api_and_tool(trade_league, client):  # noqa: F811
+    """Oct 29: one card per target, best first, with his best deal."""
+    from ffa import mcp_server
+
+    db_, row, wh = trade_league
+    con = duck.connect(wh)
+    r = service.trade_cards(con, db_, row, from_sleeper(row.scoring), SEASON, WEEK,
+                            refresh=True, fetch=_schedule)  # fmt: skip
+    assert r["cards"], "the fixture has at least one target"
+    c = r["cards"][0]
+    assert c["rank"] == 1 and c["owner"] == "Theirs" and c["deals"] >= c["could_say_yes"] >= 0
+    d = c["best_deal"]
+    assert 1 <= d["confidence"]["level"] <= 5 and d["acceptance"] in (
+        "likely",
+        "plausible",
+        "a stretch",
+        "a long shot",
+    )
+    assert d["you_get"] and all({"name", "position"} <= set(x) for x in d["you_give"])
+    assert d["title_odds"] and "% -> " in d["title_odds"]
+    assert d["usable_value_change_pct"] is not None and d["playoff_points_per_week"] is not None
+    assert c["summary"].endswith(".") and isinstance(c["watch"], list)
+    api = client.get("/trade/cards", params={"league": row.id, "refresh": True})
+    assert api.status_code == 200, api.text
+    assert api.json()["cards"][0]["name"] == c["name"]
+    mcp_server.set_client(client)
+    try:
+        from tests.test_mcp import call
+
+        t = call("trade_cards", league=row.id, refresh=True)
+        assert t["cards"] and "how_to_read" in t
+    finally:
+        mcp_server.set_client(None)

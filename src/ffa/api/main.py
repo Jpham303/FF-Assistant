@@ -481,6 +481,36 @@ def trade_packages(league: str | None = None, partner: str | None = None,
     return _shape(out, compact, top) | {"league": row.name, "season": season, "from_week": w}
 
 
+@app.get("/trade/cards")
+def trade_cards(
+    league: str | None = None,
+    position: str | None = None,
+    top: int = 8,
+    refresh: bool = False,
+    con=Depends(get_con),
+    db=Depends(get_db),
+) -> dict:
+    """Trade cards: the package generator's offers seen from the players you'd get, best
+    target first, each with his case, what to watch, and his best deal (confidence,
+    acceptance, title odds, playoff points a week, usable value)."""
+    if db is None:
+        raise HTTPException(503, "App database not configured")
+    row = _league(db, league)
+    if row is None:
+        raise HTTPException(404, "No league: pass league (see /leagues)")
+    season, w = _week(con, None)
+    rules, _label = _rules(row)
+    from ffa.trade import service as trade_service
+
+    try:
+        out = trade_service.trade_cards(con, db, row, rules, season, w, position, top, refresh)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    except LookupError as e:
+        raise HTTPException(503, str(e)) from e
+    return out | {"league": row.name, "season": season, "from_week": w}
+
+
 @app.post("/trade/targets")
 def trade_targets(req: TargetsRequest, con=Depends(get_con), db=Depends(get_db)) -> dict:
     """Target search: the best trades that raise your lineup without hurting the other

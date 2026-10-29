@@ -129,6 +129,15 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    from one trade is available for another. Offers can share players for that reason.
    Generated trades send up to 3 players and receive up to 2; a trade the user names in
    evaluate_trade can be any size.
+19. "Trade cards", "who should I trade for", "best trade targets": call trade_cards and
+   render each card in this shape, numbers exactly as returned:
+   **Name** POS · NFL team · #rank on our list · on Owner's roster
+   N deal(s) · M he could say yes to
+   summary. **Watch:** the watch lines, joined (omit Watch if empty).
+   Then the best deal: `level/5 · LABEL` with partner · acceptance; You give (name POS,
+   one per line) | You get (same); title odds before -> after · playoff pts/wk (signed) ·
+   usable value (signed %). Mention other_deals in one line each. Never add facts that
+   aren't on the card.
 """
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
@@ -330,6 +339,27 @@ def evaluate_trade(give: list[str], get: list[str], league: str | None = None,
             return {"unresolved": p1 + p2}
         body = {"give": keys_give, "get": keys_get, "playoff_weighting": playoff_weighting}
         return _call("POST", "/trade/evaluate", json=body | ({"league": league} if league else {}))
+    except ApiError as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(annotations=READ_ONLY)
+def trade_cards(
+    position: str | None = None, top: int = 8, league: str | None = None, refresh: bool = False
+) -> dict:
+    """Trade cards: the best players to trade for, one card each, best first: who he is
+    and whose roster, how many offers bring him in and how many the other manager could
+    say yes to, a one-line case (role, schedule left, last box score), what to watch
+    (injury, usage vs his norm, price tier), and his best deal (you give / you get, 1-5
+    confidence, acceptance, title odds before -> after, playoff points a week, usable
+    value). position: only targets at this position. Read-only."""
+    try:
+        params = {"top": top, "refresh": refresh}
+        if position:
+            params["position"] = position
+        if league:
+            params["league"] = league
+        return _call("GET", "/trade/cards", params=params)
     except ApiError as e:
         return {"error": str(e)}
 

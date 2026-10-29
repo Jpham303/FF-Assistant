@@ -281,6 +281,22 @@ def trade_value(lg: League, keys: list[str] | tuple[str, ...]) -> float:
 VALUE_WEIGHTS = (1.0, 0.3, 0.15, 0.1)
 
 
+def usable_value(lg: League, roster: list[str]) -> float:
+    """What a roster's starters are worth a week above replacement: each week's best
+    lineup, every starter's expected points above the best free agent at his position
+    that week (never below 0), averaged over the remaining weeks. Bench depth doesn't
+    count (Oct 29: 'usable value' on the trade cards)."""
+    n = max(len(lg.weeks), 1)
+    total = 0.0
+    for w in lg.weeks:
+        for k in lineup(lg, roster, w)[2]:
+            if k:
+                pl_ = lg.players[k]
+                total += max(0.0, pl_.weekly.get(w, (0.0, 0.0))[0]
+                             - lg.replacement.get((pl_.position, w), 0.0))  # fmt: skip
+    return total / n
+
+
 def _ros(lg: League, k: str) -> float:
     p = lg.players.get(k)
     return p.ros(lg.weeks) if p else 0.0
