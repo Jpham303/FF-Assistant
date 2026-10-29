@@ -8,7 +8,7 @@ a minimum by a hair is kept as that team's near miss instead of vanishing.
 
 Acceptance score, in points a week (the grade's inputs, weighed as the spec lists):
 
-    their lineup change
+    their stakes x their lineup change
     + LOOKS_WEIGHT x (what they get - what they give, perceived points a game)
     - CUT_WEIGHT x (perceived points a game of anyone they'd have to cut)
 
@@ -98,15 +98,21 @@ def looks_for_them(lg: League, give: tuple[str, ...], get: tuple[str, ...]) -> f
 
 
 def acceptance(lg: League, p: Package, theirs: float,
-               untradeable: frozenset[str] = frozenset()) -> tuple[float, dict]:  # fmt: skip
+               untradeable: frozenset[str] = frozenset(),
+               stakes: float = 1.0) -> tuple[float, dict]:  # fmt: skip
     """Their acceptance score (points a week) and its parts. theirs: their lineup change a
-    week. Players they'd 'cut' who are only the waiver baseline's pickups cost nothing:
-    they never had them."""
+    week. stakes: what a lineup point is worth to them against the league's average team
+    (playoffs.stakes): a title contender weighs his lineup change more, an eliminated team
+    hardly at all, so for a seller how the deal looks is what's left (Oct 28). Players
+    they'd 'cut' who are only the waiver baseline's pickups cost nothing: they never had
+    them."""
     looks_pts = side_value(lg, p.give) - side_value(lg, p.get)
     cut = [k for k in p.cuts if k not in untradeable and k in lg.players]
     cut_pts = sum(cut_value(lg, lg.players[k]) for k in cut)
-    score = theirs + LOOKS_WEIGHT * looks_pts - CUT_WEIGHT * cut_pts
+    score = stakes * theirs + LOOKS_WEIGHT * looks_pts - CUT_WEIGHT * cut_pts
     return score, {"their_lineup": round(theirs, 2),
+                   "their_stakes": round(stakes, 2),
+                   "their_lineup_weighted": round(stakes * theirs, 2),
                    "how_it_looks": round(LOOKS_WEIGHT * looks_pts, 2),
                    "cuts": round(-CUT_WEIGHT * cut_pts, 2),
                    "cut_players": [lg.players[k].name for k in cut]}  # fmt: skip
@@ -163,7 +169,8 @@ class Offer:
 def generate(lg: League, me: str, *, playoff_weighting: bool = False,
              partners: list[str] | None = None,
              untradeable: frozenset[str] = frozenset(), give: tuple[str, ...] = (),
-             position: str | None = None) -> dict[str, list[Offer]]:  # fmt: skip
+             position: str | None = None,
+             stakes: dict[str, float] | None = None) -> dict[str, list[Offer]]:  # fmt: skip
     """team -> its best offer in each grade (Likely first), you gaining in every one,
     then its best near miss if one exists. `give` / `position` narrow the search the way
     the target search asks (your named players only; targets at one position)."""
@@ -178,7 +185,7 @@ def generate(lg: League, me: str, *, playoff_weighting: bool = False,
                            untradeable=untradeable, give=tuple(give),
                            position=position):  # fmt: skip
             mine, theirs = p.mine / n, p.theirs / n
-            sc, parts = acceptance(lg, p, theirs, untradeable)
+            sc, parts = acceptance(lg, p, theirs, untradeable, (stakes or {}).get(tid, 1.0))
             lost = trade_value(lg, p.give) - trade_value(lg, p.get)
             g, note = grade(mine, sc, min_gain(lost))
             if g is None:

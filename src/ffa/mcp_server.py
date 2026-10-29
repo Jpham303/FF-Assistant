@@ -102,7 +102,8 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    trade_packages. Lead with league_wide's Likely and Fair offers, then the best Stretch
    and Long shot, then any Near miss (say what it missed by: grade_note). For each: what
    the user gives and gets, his gain a week and theirs, the grade and its acceptance
-   parts (their lineup, how it looks, anyone they'd cut), reasons for both sides,
+   parts (their lineup change x their stakes, how it looks, anyone they'd cut; stakes: a
+   contender weighs lineup points more, an eliminated team hardly at all), reasons for both sides,
    playoff and title odds. skipped_pickups are waiver pickups the trade leaves no room for, not
    players he owns. Grades are a scored judgment, not a probability.
 16. Injuries: judge how serious an injury is and when a player returns ONLY from what the

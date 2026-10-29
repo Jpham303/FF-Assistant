@@ -260,12 +260,17 @@ def test_trade_packages_live_saved_api_and_tool(trade_league, client):  # noqa: 
     # pickup for your open spot, so he can't be traded. You: 0 + 14 + 12 + 11 = 37 ->
     # Quinn 18 + Bravo 9 + Charlie 12 + Foxtrot 11 = 50: +13 a week. They: Quinn 18 ->
     # Alpha 14 + Delta 7 = 21: +3. How it looks to them: 0.3 x ((14 + 0.3 x 7) - 18) =
-    # -0.57; no cuts; score 2.43 >= 1.0: Likely, the best for you in that grade.
+    # -0.57; no cuts. Their lineup change counts at their stakes (Oct 28): score =
+    # stakes x 3 - 0.57 (2.43 at the league average's 1.0) >= 1.0: Likely, the best for
+    # you in that grade.
     top = r["league_wide"][0]
     assert (top["grade"], sorted(top["give"]), top["get"]) == ("Likely", ["00-A", "00-D"],
                                                               ["00-Q"])  # fmt: skip
     assert (top["you_per_week"], top["them_per_week"]) == (13.0, 3.0)
-    assert top["acceptance"]["score"] == 2.43 and top["acceptance"]["how_it_looks"] == -0.57
+    acc = top["acceptance"]
+    assert acc["how_it_looks"] == -0.57 and acc["their_lineup"] == 3.0
+    assert acc["score"] == pytest.approx(acc["their_stakes"] * 3.0 - 0.57, abs=0.01)
+    assert acc["score"] >= 1.0 and r["stakes"]["by_team"]["Theirs"] == acc["their_stakes"]
     for x in r["league_wide"]:
         assert x["grade"] in r["grades"] and x["you_per_week"] >= 0.1
         assert x["reasons_you"] and x["reasons_them"] and x["what_they_see"]["reads_as"]

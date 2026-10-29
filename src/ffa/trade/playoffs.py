@@ -127,3 +127,35 @@ def _title(score: np.ndarray, teams: list[str], weekly: dict, playoff_teams: int
         slots = np.where(a_wins, a, b)
     champ = slots[:, 0]
     return np.array([(champ == i).mean() for i in range(t)])
+
+
+STAKES_BUMP = 1.0  # points a week added to one team to measure what a point is worth to it
+STAKES_MAX = 3.0  # a weight above this is simulation noise on a near-certain champion
+
+
+def stakes(records: dict[str, tuple[float, float]],
+           weekly: dict[str, dict[int, tuple[float, float]]],
+           schedule: dict[int, list[tuple[str, str]]], playoff_teams: int,
+           playoff_weeks: list[int] | None = None, round_type: int = 0,
+           n: int = N_SEASONS, seed: int = 0) -> dict[str, float] | None:  # fmt: skip
+    """team -> what a point a week is worth to it, relative to the league's average team
+    (1.0): how much its title odds rise when it scores STAKES_BUMP more every remaining
+    week, divided by the league mean of that rise. A contender's lineup points count for
+    more, an eliminated team's for ~0 (Oct 28: a lost lineup point cost a 31% title
+    favourite and an eliminated team the same in the acceptance score). Same random
+    draws for every run, so the differences aren't simulation noise. None when title
+    odds can't be simulated."""
+    base = season(records, weekly, schedule, playoff_teams, playoff_weeks, round_type, n, seed)
+    if any(v["title"] is None for v in base.values()):
+        return None
+    rise = {}
+    for t in records:
+        bumped = dict(weekly)
+        bumped[t] = {w: (mu + STAKES_BUMP, var) for w, (mu, var) in weekly.get(t, {}).items()}
+        got = season(records, bumped, schedule, playoff_teams, playoff_weeks, round_type, n,
+                     seed)[t]["title"]  # fmt: skip
+        rise[t] = max(got - base[t]["title"], 0.0)
+    mean = sum(rise.values()) / max(len(rise), 1)
+    if mean <= 0:
+        return None
+    return {t: round(min(r / mean, STAKES_MAX), 2) for t, r in rise.items()}

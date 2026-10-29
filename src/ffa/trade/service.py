@@ -109,7 +109,8 @@ GRADES_NOTE = {g: f"acceptance score at least {line} a week" for g, line in
                packages.THRESHOLDS} | {packages.NEAR_MISS: "missed a grade or a minimum by a "
                                        "hair (see grade_note)"}  # fmt: skip
 ACCEPTANCE_NOTE = (
-    f"Acceptance score = their lineup change a week + {packages.LOOKS_WEIGHT} x how it "
+    "Acceptance score = their stakes (see `stakes`) x their lineup change a week + "
+    f"{packages.LOOKS_WEIGHT} x how it "
     "looks to them (perceived points a game they come out ahead) - "
     f"{packages.CUT_WEIGHT} x perceived points a game of anyone they'd have to cut. "
     f"Your side: every offer gains you at least max({packages.OFFER_MIN_GAIN}, "
@@ -190,9 +191,10 @@ def trade_targets(con, db, row: LeagueRow, rules: ScoringRules, season: int, wee
     # The package generator, narrowed to the question (Oct 28, issue #2): every target
     # passes the same minimum gain, trade-value check and acceptance grade as
     # trade_packages, so the two never disagree on what's worth offering.
+    st = _stakes(ctx)
     offers = packages.generate(lg, ctx.me, playoff_weighting=playoff_weighting,
                                partners=partners, untradeable=picked, give=tuple(give),
-                               position=pos)  # fmt: skip
+                               position=pos, stakes=st)  # fmt: skip
     graded, near = [], []
     for tid, offs in offers.items():
         for o in offs:
@@ -217,6 +219,7 @@ def trade_targets(con, db, row: LeagueRow, rules: ScoringRules, season: int, wee
         "near_misses": near_items,
         "grades": GRADES_NOTE,
         "acceptance_note": ACCEPTANCE_NOTE,
+        "stakes": _stakes_dict(ctx, st),
         "waiver_baseline": _waiver_dict(ctx, waivers, {ctx.me}),
         "searched": {"give": _names(lg, give), "position": pos,
                      "partner": lg.teams[partners[0]].name if partners else "every team",
@@ -232,6 +235,36 @@ WAIVER_NOTE = (
     "Scored after the free waiver moves each team could already make (best free agent added, "
     "least valuable player dropped, when it adds at least {min} points a week): a trade gets "
     "credit only for what it adds beyond those."
+)
+
+
+def _stakes(ctx: context.Context) -> dict[str, float] | None:
+    """team id -> what a lineup point is worth to it (playoffs.stakes), or None."""
+    lg = ctx.league
+    if not (ctx.schedule and ctx.playoff_teams):
+        return None
+    rosters = {tid: t.roster for tid, t in lg.teams.items()}
+    return playoffs.stakes(ctx.records, _weekly(ctx, rosters), ctx.schedule,
+                           int(ctx.playoff_teams), sorted(lg.playoff_weeks),
+                           ctx.playoff_round_type)  # fmt: skip
+
+
+def _stakes_dict(ctx: context.Context, st: dict[str, float] | None) -> dict:
+    lg = ctx.league
+    if st is None:
+        return {"note": "unavailable (no synced schedule or projected playoff weeks): every "
+                        "team's lineup change counts at 1.0"}  # fmt: skip
+    return {"note": STAKES_NOTE,
+            "by_team": {lg.teams[t].name: w for t, w in sorted(st.items(), key=lambda kv: -kv[1])
+                        if t in lg.teams}}  # fmt: skip
+
+
+STAKES_NOTE = (
+    "What a point a week is worth to each team, against the league's average team (1.0): "
+    "how much its title odds rise with 1 more point every remaining week. The other "
+    "team's lineup change is multiplied by this in the acceptance score: a title "
+    "contender weighs it more, an eliminated team hardly at all (then how the deal "
+    "looks is what's left)."
 )
 
 
@@ -288,8 +321,9 @@ def trade_packages(con, db, row: LeagueRow, rules: ScoringRules, season: int, we
     lg = ctx.league
     team_needs = search.needs(lg)
     picked = _picked_up(waivers)
+    st = _stakes(ctx)
     offers = packages.generate(lg, ctx.me, playoff_weighting=playoff_weighting,
-                               partners=partners, untradeable=picked)  # fmt: skip
+                               partners=partners, untradeable=picked, stakes=st)  # fmt: skip
     by_team, flat = [], []
     for tid, offs in offers.items():
         items = [_offer_item(ctx, tid, o, team_needs, picked, playoff_weighting) for o in offs]
@@ -299,6 +333,7 @@ def trade_packages(con, db, row: LeagueRow, rules: ScoringRules, season: int, we
     return {
         "grades": GRADES_NOTE,
         "acceptance_note": ACCEPTANCE_NOTE,
+        "stakes": _stakes_dict(ctx, st),
         "by_team": by_team,
         "league_wide": flat,
         "waiver_baseline": _waiver_dict(ctx, waivers, {ctx.me}),
@@ -342,7 +377,7 @@ DATASET = "trade_packages"  # precomputed daily after rest of season
 # Bumped when an offer gains fields the tools rely on: a saved run in an older format is
 # recomputed instead of served (Oct 28: a board saved before title odds existed showed
 # none until the next daily run).
-PAYLOAD_VERSION = 2
+PAYLOAD_VERSION = 3  # 3: stakes-weighted acceptance
 
 
 def save_all(warehouse_dir, season: int, week: int, payloads: dict[str, dict],

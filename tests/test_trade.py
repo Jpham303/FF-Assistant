@@ -160,6 +160,34 @@ def test_title_odds_from_the_bracket():
     assert o3["a"]["title"] is None and o3["a"]["playoffs"] > 0.9
 
 
+def test_stakes_weigh_a_lineup_point_by_what_it_does_for_the_title():
+    """Oct 28: a lost lineup point cost a title favourite and an eliminated team the same."""
+    from ffa.trade import playoffs
+
+    teams = [chr(97 + i) for i in range(8)]
+    # Records 3 games out: a-d have clinched-ish, g-h are eliminated (can't reach 6th).
+    wins = {"a": 30, "b": 28, "c": 26, "d": 24, "e": 22, "f": 20, "g": 2, "h": 1}
+    mu = {t: 100.0 for t in teams} | {"a": 115.0}  # a: the title favourite
+    rec, wk, sch = _six(mu, wins)
+    st = playoffs.stakes(rec, wk, sch, 6, [15, 16, 17], 0, n=6000)
+    assert st["g"] == 0 and st["h"] == 0  # eliminated: a point is worth nothing
+    assert st["c"] > 1.0  # in the field without a bye: a point matters over 3 rounds
+    assert sum(st.values()) / len(st) == pytest.approx(1.0, abs=0.05)
+
+
+def test_stakes_scale_their_lineup_change_in_the_acceptance_score():
+    from ffa.trade import packages as P
+    from ffa.trade.search import Package
+
+    lg = _league()
+    pk = Package("them", ("RB3",), ("WR4",), 0.0, 0.0)
+    base, parts = P.acceptance(lg, pk, theirs=-2.0)
+    contender, _ = P.acceptance(lg, pk, theirs=-2.0, stakes=2.0)
+    seller, sp = P.acceptance(lg, pk, theirs=-2.0, stakes=0.0)
+    assert contender == pytest.approx(base - 2.0) and seller == pytest.approx(base + 2.0)
+    assert sp["their_lineup_weighted"] == 0.0 and sp["how_it_looks"] == parts["how_it_looks"]
+
+
 # ---------------------------------------------------------------- target search
 
 from ffa.trade import search  # noqa: E402
