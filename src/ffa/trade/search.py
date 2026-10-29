@@ -10,7 +10,8 @@
    named players are the only ones you give when you name any.
 3. Packages. Every 1-for-1 between the two candidate lists, then the promising ones
    grow by one player at a time (a sweetener from you, or a second player from them for
-   consolidation) up to MAX_SIDE a side, while it makes the deal better for both.
+   consolidation) up to MAX_GIVE from you and MAX_GET from them, while it makes the
+   deal better for both.
 4. Score both sides with the trade-evaluation rule (drops, free-agent adds), keep the
    ones where you gain and they lose at most THEIR_MAX_LOSS a week, best first: one per
    core deal (the best player each way), and one per team in a league-wide search so
@@ -23,7 +24,10 @@ from dataclasses import dataclass, field
 
 from ffa.trade.core import STREAMABLE, League, after_trade, balance, lineup, value
 
-MAX_SIDE = 4
+# Generated trades: up to 3 players sent, 2 received (Oct 29). A trade you name in
+# evaluate_trade can be any size.
+MAX_GIVE, MAX_GET = 3, 2
+MAX_SIDE = max(MAX_GIVE, MAX_GET)
 CANDIDATES = 6  # per side, per opponent: players tried when growing a package
 SEEDS = 12  # per side, per opponent: every 1-for-1 among these is scored
 GROW_MIN = 0.5  # points a week for you: 1-for-1s worth growing by one more player
@@ -169,7 +173,7 @@ def team_pool(lg: League, me: str, tid: str, *, give: tuple[str, ...] = (),
     worth = sorted((p for p in seeds if p.mine >= GROW_MIN * n), key=lambda p: -p.mine)
     beam = worth[:GROW_FIRST] or _best(seeds, n, max_loss)
     first = True
-    for _ in range(2 * (MAX_SIDE - 1)):
+    for _ in range(MAX_GIVE + MAX_GET - 2):
         grown: list[Package] = []
         # First step: every player of yours who'd help them is tried as a sweetener (Oct
         # 27: Barkley, a sweetener that formed Jameson + Barkley for Hubbard, ranked
@@ -179,12 +183,12 @@ def team_pool(lg: League, me: str, tid: str, *, give: tuple[str, ...] = (),
         for p in beam:
             adds_give = [] if fixed else [k for k in gives if k not in p.give]
             adds_get = [k for k in gets[:CANDIDATES] if k not in p.get]
-            for k in adds_give[:width] if len(p.give) < MAX_SIDE else []:
+            for k in adds_give[:width] if len(p.give) < MAX_GIVE else []:
                 q = _try(lg, me, tid, p.give + (k,), p.get, pw, pool)
                 if q and q.theirs > p.theirs and q.mine > 0:
                     q.tags = sorted({*p.tags, "sweetener"})
                     grown.append(q)
-            for k in adds_get if len(p.get) < MAX_SIDE else []:
+            for k in adds_get if len(p.get) < MAX_GET else []:
                 q = _try(lg, me, tid, p.give, p.get + (k,), pw, pool)
                 if q and q.mine > p.mine and q.theirs >= min(p.theirs, -max_loss * n):
                     q.tags = sorted({*p.tags, "consolidation" if len(q.get) > len(q.give)

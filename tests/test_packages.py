@@ -122,3 +122,27 @@ def test_generate_narrows_to_named_players_and_a_position():
     pos = lg.players[wide[0].package.get[0]].position
     by_pos = [o for offs in P.generate(lg, "me", position=pos).values() for o in offs]
     assert by_pos and all(lg.players[k].position == pos for o in by_pos for k in o.package.get)
+
+
+def test_generated_trades_send_at_most_3_and_get_at_most_2():
+    """Oct 29: generated trades are up to 3 players sent, 2 received."""
+    from ffa.trade.search import MAX_GET, MAX_GIVE
+
+    assert (MAX_GIVE, MAX_GET) == (3, 2)
+    lg = _league()
+    for p in lg.players.values():
+        vals = [v[0] for v in p.weekly.values()]
+        p.per_game = p.ppg = p.last3 = sum(vals) / len(vals)
+    for offs in P.generate(lg, "me").values():
+        for o in offs:
+            assert len(o.package.give) <= 3 and len(o.package.get) <= 2
+
+
+def test_a_named_trade_can_be_any_size():
+    """Oct 29: the 3-for-2 limit is for generated trades only; evaluate_trade takes any."""
+    from ffa.trade import core
+
+    lg = _league()
+    r = core.evaluate(lg, "me", "them", give=["RB2", "RB3", "WR1", "WR2"],
+                      get=["WR3", "WR4", "WR5"])  # fmt: skip
+    assert r["verdict"] and "per_week" in r["you"]

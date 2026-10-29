@@ -226,7 +226,7 @@ def trade_targets(con, db, row: LeagueRow, rules: ScoringRules, season: int, wee
                      "rule": "the package generator's checks (as trade_packages): your gain at "
                              "least your_gain_needed, graded Long shot or better; best grade "
                              f"first, then your gain; one per team unless a partner is named; "
-                             f"up to {search.MAX_SIDE} players a side"},
+                             f"up to {search.MAX_GIVE} players sent and {search.MAX_GET} received"},
         "weeks": lg.weeks, "scoring": ctx.scoring, "as_of": ctx.as_of, "notes": ctx.notes,
     }  # fmt: skip
 
