@@ -34,9 +34,10 @@ from ffa.trade.core import CLOSE, STREAMABLE, STREAMABLE_SEEN, League, Player, t
 from ffa.trade.search import Package, _distinct, team_pool
 
 GRADES = ("Likely", "Fair", "Stretch", "Long shot")
-# What the engine generates and recommends (Oct 29): Likely, then Fair. Stretch and
-# Long shot only label a trade you name in evaluate_trade.
-GENERATED = ("Likely", "Fair")
+# What the engine generates (Oct 29, revised): every Likely or Fair deal that raises
+# your title odds (tier 1), then Stretch and Long shot deals that do (tier 2).
+GENERATED = ("Likely", "Fair", "Stretch", "Long shot")
+TIER = {"Likely": 1, "Fair": 1, "Stretch": 2, "Long shot": 2}
 NEAR_MISS = "Near miss"
 UNLIKELY = "Very unlikely"  # a named trade below the Long shot line
 THRESHOLDS = (("Likely", 1.0), ("Fair", 0.0), ("Stretch", -1.0), ("Long shot", -3.0))
@@ -53,9 +54,10 @@ CUT_WEIGHT = 0.3  # cutting a real player hurts: Lamar Jackson (~18 a game) cost
 OFFER_MIN_GAIN = CLOSE
 LONG_SHOT_MY_GAIN = 1.0
 VALUE_RATIO = 0.25  # each point a week of trade value you give up needs 0.25 of gain
-# Offers kept per team: the best 3 Likely and the best 3 Fair, each a different core
-# deal, by your gain; then everything is ranked by `rank` (Oct 29: best trades first).
-PER_GROUP = 3
+# Offers kept per team and tier: every distinct core deal (a variant with other
+# throw-ins is the same offer), up to this many, by your gain; then everything is ranked
+# by `rank` and only those that raise your title odds are shown (Oct 29: all of them).
+PER_TIER = 10
 NEAR_SCORE = 0.25  # within this of the next grade (or of Long shot): said, or kept
 NEAR_GAIN = 0.1  # within this under your minimum gain: kept as a near miss
 LOOKS_EVEN = 0.10  # for 'reads as': perceived values within 10% read as even
@@ -215,10 +217,11 @@ def generate(lg: League, me: str, *, playoff_weighting: bool = False,
                 parts | {"your_value_lost_per_week": round(lost, 2),
                          "your_gain_needed": round(min_gain(lost), 2)}, note))  # fmt: skip
         out[tid] = []
-        for g in GENERATED:  # Stretch, Long shot and near misses aren't generated
-            ranked = sorted(cands.get(g, []), key=lambda o: (-o.mine, -o.score))
+        for tier in (1, 2):  # near misses aren't generated
+            ranked = sorted((o for g in GENERATED if TIER[g] == tier for o in cands.get(g, [])),
+                            key=lambda o: (-o.mine, -o.score))  # fmt: skip
             keep = _distinct(lg, [o.package for o in ranked])
-            out[tid] += [o for o in ranked if o.package in keep][:PER_GROUP]
+            out[tid] += [o for o in ranked if o.package in keep][:PER_TIER]
     return out
 
 
@@ -232,10 +235,10 @@ def label(score: float) -> str:
 
 
 def rank(grade: str, title_change: float | None, mine: float) -> tuple:
-    """Best trades first (Oct 29): Likely offers, then Fair (any other grade after);
-    within each, the biggest rise in your title odds first, your gain a week breaking
-    ties."""
-    group = GENERATED.index(grade) if grade in GENERATED else len(GENERATED)
+    """Best trades first (Oct 29): tier 1 (Likely and Fair together), then tier 2
+    (Stretch and Long shot); within each, the biggest rise in your title odds first, your
+    gain a week breaking ties."""
+    group = TIER.get(grade, 3)
     return (group, -(title_change or 0.0), -mine)
 
 
@@ -273,3 +276,10 @@ def reasons(lg: League, offer: Offer, evaluation: dict, team_needs: dict[str, fl
         them.append(f"Consolidation: {len(p.get)}-for-{len(p.give)} opens a roster spot "
                     "for them")  # fmt: skip
     return you[:3], them[:3]
+
+
+def helps_title(x: dict) -> bool:
+    """A scored offer raises your title odds (Oct 29: only those are recommended). When
+    title odds can't be simulated, your lineup gain stands in."""
+    title = (x.get("title_odds") or {}).get("you")
+    return title["change"] > 0 if title else x["you_per_week"] > 0

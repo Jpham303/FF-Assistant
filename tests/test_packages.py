@@ -84,9 +84,10 @@ def test_generate_on_hand_built_rosters():
     offers = out["them"]
     assert offers, "RB3 for WR3 (+8 a week for you, even for them) at least"
     grades = [o.grade for o in offers]
-    # Oct 29: up to 3 Likely and 3 others (Fair/Stretch/Long shot together) a team.
-    assert grades.count("Likely") <= P.PER_GROUP
-    assert sum(g in ("Fair", "Stretch", "Long shot") for g in grades) <= P.PER_GROUP
+    # Oct 29: up to PER_TIER distinct deals a tier (Likely/Fair, Stretch/Long shot).
+    assert sum(P.TIER.get(g) == 1 for g in grades) <= P.PER_TIER
+    assert sum(P.TIER.get(g) == 2 for g in grades) <= P.PER_TIER
+    assert P.NEAR_MISS not in grades
     for o in offers:
         assert o.mine >= P.OFFER_MIN_GAIN - P.NEAR_GAIN
         assert P.grade(o.mine, o.score)[0] == o.grade
@@ -155,29 +156,33 @@ def test_a_named_trade_can_be_any_size():
     assert r["verdict"] and "per_week" in r["you"]
 
 
-def test_best_trades_first_likely_then_fair_by_title_odds():
-    """Oct 29: Likely first, then Fair, each by your title-odds gain (your gain a week
-    breaking ties); anything else after."""
+def test_best_trades_first_two_tiers_by_title_odds():
+    """Oct 29: every Likely or Fair deal first (together, by your title-odds gain), then
+    Stretch and Long shot (the same way); your gain a week breaks ties."""
     items = [
         {"grade": "Fair", "title_odds": {"you": {"change": 0.04}}, "you_per_week": 1.0},
         {"grade": "Likely", "title_odds": {"you": {"change": 0.01}}, "you_per_week": 0.6},
         {"grade": "Stretch", "title_odds": {"you": {"change": 0.09}}, "you_per_week": 3.0},
         {"grade": "Likely", "title_odds": {"you": {"change": 0.02}}, "you_per_week": 0.5},
-        {"grade": "Fair", "title_odds": None, "you_per_week": 1.5},
+        {"grade": "Long shot", "title_odds": {"you": {"change": 0.03}}, "you_per_week": 1.5},
         {"grade": "Fair", "title_odds": {"you": {"change": 0.04}}, "you_per_week": 1.2},
     ]
     got = [(x["grade"], x["you_per_week"]) for x in sorted(items, key=P.item_rank)]
-    assert got == [("Likely", 0.5), ("Likely", 0.6), ("Fair", 1.2), ("Fair", 1.0),
-                   ("Fair", 1.5), ("Stretch", 3.0)]  # fmt: skip
+    assert got == [("Fair", 1.2), ("Fair", 1.0), ("Likely", 0.5), ("Likely", 0.6),
+                   ("Stretch", 3.0), ("Long shot", 1.5)]  # fmt: skip
+    assert P.helps_title(items[0]) and not P.helps_title(
+        {"grade": "Fair", "title_odds": {"you": {"change": -0.01}}, "you_per_week": 2.0}
+    )
+    assert P.helps_title({"grade": "Fair", "title_odds": None, "you_per_week": 0.6})
 
 
-def test_only_likely_and_fair_are_generated_other_grades_label_named_trades():
+def test_grades_generated_and_the_label_for_named_trades():
     lg = _league()
     for p in lg.players.values():
         vals = [v[0] for v in p.weekly.values()]
         p.per_game = p.ppg = p.last3 = sum(vals) / len(vals)
     for offs in P.generate(lg, "me").values():
-        assert all(o.grade in P.GENERATED for o in offs)
+        assert all(o.grade in P.GENERATED for o in offs)  # no near misses
     assert [P.label(x) for x in (1.2, 0.0, -0.5, -2.9, -3.1)] == [
         "Likely", "Fair", "Stretch", "Long shot", "Very unlikely"]  # fmt: skip
 

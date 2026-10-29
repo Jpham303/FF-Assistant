@@ -133,7 +133,8 @@ def test_trade_targets_service_api_and_tool(trade_league, client):  # noqa: F811
     for p in r["packages"]:  # each one scored like evaluate_trade
         assert p["you"]["ros_change"] > 0 and "verdict" in p and p["shape"]
         # Issue #2: the generator's checks, every time.
-        assert p["grade"] in ("Likely", "Fair")  # Oct 29: only these are generated
+        assert p["grade"] in ("Likely", "Fair", "Stretch", "Long shot")
+        assert packages.helps_title(p)  # Oct 29: only deals that raise your title odds
         assert p["you_per_week"] >= p["acceptance"]["your_gain_needed"]
     assert "near_misses" not in r
     assert r["packages"], "the fixture has at least one offer worth making"
@@ -259,17 +260,18 @@ def test_trade_packages_live_saved_api_and_tool(trade_league, client):  # noqa: 
     con = duck.connect(wh)
     r = service.trade_packages(con, db_, row, from_sleeper(row.scoring), SEASON, WEEK,
                                fetch=_schedule)  # fmt: skip
-    assert set(r["grades"]) == {"Likely", "Fair", "generated"}
-    assert all(x["grade"] in ("Likely", "Fair") for x in r["league_wide"])
+    assert set(r["grades"]) == {"Likely", "Fair", "Stretch", "Long shot", "generated"}
+    assert all(packages.helps_title(x) for x in r["league_wide"])
     assert [t["team"] for t in r["by_team"]] == ["Theirs"]
-    # The best offer is Likely, for Quinn (QB 18), and its score is exactly its parts:
+    # The best offer raises your title odds, and its score is exactly its parts:
     # stakes x their lineup change + how it looks + their value + cuts (Oct 29).
     top = r["league_wide"][0]
-    assert top["grade"] == "Likely" and top["get"] == ["00-Q"] and top["you_per_week"] > 0
+    assert packages.helps_title(top) and top["you_per_week"] > 0
     acc = top["acceptance"]
     parts = (acc["their_lineup_weighted"] + acc["how_it_looks"] + acc["their_value"]
              + acc["cuts"])  # fmt: skip
-    assert acc["score"] == pytest.approx(parts, abs=0.02) and acc["score"] >= 1.0
+    assert acc["score"] == pytest.approx(parts, abs=0.02)
+    assert packages.label(acc["score"]) == top["grade"]
     assert acc["their_lineup_weighted"] == pytest.approx(
         acc["their_stakes"] * acc["their_lineup"], abs=0.02
     )

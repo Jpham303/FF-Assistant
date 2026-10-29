@@ -118,10 +118,11 @@ def _evaluate(ctx: context.Context, partner: str, give: list[str], get: list[str
 
 
 GRADES_NOTE = {g: f"acceptance score at least {line} a week" for g, line in
-               packages.THRESHOLDS if g in packages.GENERATED} | {
-    "generated": "only Likely and Fair offers are generated (Likely first); Stretch "
-                 "(score -1 to 0), Long shot (-3 to -1) and Very unlikely (below -3) only "
-                 "label a trade you name in evaluate_trade"}  # fmt: skip
+               packages.THRESHOLDS} | {
+    "generated": "only deals that raise your title odds: every Likely or Fair one first "
+                 "(together, by your title-odds gain), then Stretch and Long shot ones "
+                 "(the same way). Very unlikely (below -3) only labels a trade you "
+                 "name"}  # fmt: skip
 ACCEPTANCE_NOTE = (
     "Acceptance score = their stakes (see `stakes`) x their lineup change a week + "
     f"{packages.LOOKS_WEIGHT} x how it "
@@ -216,9 +217,11 @@ def trade_targets(con, db, row: LeagueRow, rules: ScoringRules, season: int, wee
     graded = [(tid, o) for tid, offs in offers.items() for o in offs]
     needs = search.needs(lg)
     # Best trades first (Oct 29): every candidate scored (title odds included), then
-    # Likely first and the rest together, by your title-odds gain.
-    items = sorted((_offer_item(ctx, tid, o, needs, picked, playoff_weighting, full=True)
-                    for tid, o in graded), key=packages.item_rank)  # fmt: skip
+    # Likely and Fair first, then Stretch and Long shot, by your title-odds gain; only
+    # deals that raise your title odds.
+    items = sorted((x for x in (_offer_item(ctx, tid, o, needs, picked, playoff_weighting,
+                                            full=True) for tid, o in graded)
+                    if packages.helps_title(x)), key=packages.item_rank)  # fmt: skip
     if not partners:  # league-wide: each team's best, so the list isn't one roster
         seen: set[str] = set()
         items = [x for x in items if not (x["partner"] in seen or seen.add(x["partner"]))]
@@ -236,8 +239,9 @@ def trade_targets(con, db, row: LeagueRow, rules: ScoringRules, season: int, wee
         "searched": {"give": _names(lg, give), "position": pos,
                      "partner": lg.teams[partners[0]].name if partners else "every team",
                      "rule": "the package generator's checks (as trade_packages): your gain at "
-                             "least your_gain_needed, graded Likely or Fair; Likely "
-                             "first, then Fair, each by your title-odds gain (then your "
+                             "least your_gain_needed and your title odds up; Likely and "
+                             "Fair first, then Stretch and Long shot, each by your "
+                             "title-odds gain (then your "
                              "gain a week); one per team unless a partner is named; "
                              f"up to {search.MAX_GIVE} players sent and {search.MAX_GET} received"},
         "weeks": lg.weeks, "scoring": ctx.scoring, "as_of": ctx.as_of, "notes": ctx.notes,
@@ -358,6 +362,7 @@ def trade_packages(con, db, row: LeagueRow, rules: ScoringRules, season: int, we
     by_team, flat = [], []
     for tid, offs in offers.items():
         items = [_offer_item(ctx, tid, o, team_needs, picked, playoff_weighting) for o in offs]
+        items = [x for x in items if packages.helps_title(x)]  # only what raises your odds
         flat += items
         by_team.append({"team": lg.teams[tid].name, "packages": items})
     flat.sort(key=packages.item_rank)
@@ -410,7 +415,7 @@ DATASET = "trade_packages"  # precomputed daily after rest of season
 # Bumped when an offer gains fields the tools rely on: a saved run in an older format is
 # recomputed instead of served (Oct 28: a board saved before title odds existed showed
 # none until the next daily run).
-PAYLOAD_VERSION = 7  # 3: stakes; 4: cards; 5: best first; 6: their value; 7: Likely/Fair
+PAYLOAD_VERSION = 8  # 3: stakes; 4: cards; 5: best first; 6: their value; 8: tiers
 
 
 def save_all(warehouse_dir, season: int, week: int, payloads: dict[str, dict],
@@ -487,8 +492,8 @@ def trade_cards(con, db, row: LeagueRow, rules: ScoringRules, season: int, week:
 
 
 CARDS_NOTE = (
-    "One card per player you could get, best first: his best deal graded Likely first, "
-    "then the rest, each by your title-odds gain. deals: offers that bring him in; "
+    "One card per player you could get, best first: his best deal's tier (Likely or Fair, "
+    "then Stretch or Long shot), then your title-odds gain. deals: offers that bring him in; "
     "could_say_yes: those graded Likely or Fair. "
     "confidence: 1-5 from p_ahead, your chance of coming out ahead over the rest of the "
     "season (5: 90%+, 4: 75-90%, 3: 60-75%, 2: 50-60%, 1: under 50%). acceptance: the "
@@ -545,7 +550,8 @@ def compact(payload: dict, top: int | None = COMPACT_TOP) -> dict:
     out = {k: v for k, v in payload.items() if k not in ("by_team", "league_wide")}
     return out | {
         "league_wide": [short(x) for x in keep],
-        "shown": f"{len(keep)} of {len(flat)} offers (Likely first, by your gain); "
+        "shown": f"{len(keep)} of {len(flat)} offers (Likely and Fair first, then Stretch "
+                 "and Long shot, each by your title-odds gain); "
                  "compact=false for every field, top=N for more",
         "teams_with_offers": sorted({x["partner"] for x in flat}),
     }  # fmt: skip
