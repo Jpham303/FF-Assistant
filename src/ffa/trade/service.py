@@ -472,7 +472,8 @@ def trade_cards(con, db, row: LeagueRow, rules: ScoringRules, season: int, week:
 
 CARDS_NOTE = (
     "One card per player you could get, best first: his best deal graded Likely first, "
-    "then the rest, each by your title-odds gain. deals: offers that bring him in; could_say_yes: those graded Likely or Fair. "
+    "then the rest, each by your title-odds gain. deals: offers that bring him in; "
+    "could_say_yes: those graded Likely or Fair. "
     "confidence: 1-5 from p_ahead, your chance of coming out ahead over the rest of the "
     "season (5: 90%+, 4: 75-90%, 3: 60-75%, 2: 50-60%, 1: under 50%). acceptance: the "
     "grade in words (likely, plausible, a stretch, a long shot). playoff_points_per_week: "
