@@ -214,7 +214,7 @@ def build(lg: core.League, offers: list[dict], player_games: pl.DataFrame,
           top: int = 8) -> list[dict]:  # fmt: skip
     """Cards for the best `top` targets, best first: his best deal Likely first, then
     the rest, each by your title-odds gain (then your gain a week). offers: trade_packages'
-    league_wide items (near misses left out). owners: player key -> team name."""
+    league_wide items (Likely and Fair). owners: player key -> team name."""
     by_target: dict[str, list[dict]] = {}
     for x in offers:
         if x["grade"] not in GRADE_ORDER or not x.get("get_keys"):

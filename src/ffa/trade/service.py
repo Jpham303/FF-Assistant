@@ -53,6 +53,7 @@ def evaluate_trade(con, db, row: LeagueRow, rules: ScoringRules, season: int, we
             "it's a bug (not a 0-point player).")  # fmt: skip
     waivers = _apply_waivers(ctx, playoff_weighting, frozenset(give + get))
     res = _evaluate(ctx, partner, give, get, playoff_weighting)
+    res["acceptance"] = _acceptance(ctx, partner, give, get, res, _picked_up(waivers))
     res["waiver_baseline"] = _waiver_dict(ctx, waivers, {ctx.me, partner})
     res["scoring"], res["as_of"], res["notes"] = ctx.scoring, ctx.as_of, ctx.notes
     if res["playoff_odds"] is None:
@@ -117,8 +118,10 @@ def _evaluate(ctx: context.Context, partner: str, give: list[str], get: list[str
 
 
 GRADES_NOTE = {g: f"acceptance score at least {line} a week" for g, line in
-               packages.THRESHOLDS} | {packages.NEAR_MISS: "missed a grade or a minimum by a "
-                                       "hair (see grade_note)"}  # fmt: skip
+               packages.THRESHOLDS if g in packages.GENERATED} | {
+    "generated": "only Likely and Fair offers are generated (Likely first); Stretch "
+                 "(score -1 to 0), Long shot (-3 to -1) and Very unlikely (below -3) only "
+                 "label a trade you name in evaluate_trade"}  # fmt: skip
 ACCEPTANCE_NOTE = (
     "Acceptance score = their stakes (see `stakes`) x their lineup change a week + "
     f"{packages.LOOKS_WEIGHT} x how it "
@@ -129,7 +132,7 @@ ACCEPTANCE_NOTE = (
     f"{packages.CUT_WEIGHT} x perceived points a game of anyone they'd have to cut. "
     f"Your side: every offer gains you at least max({packages.OFFER_MIN_GAIN}, "
     f"{packages.VALUE_RATIO} x your_value_lost_per_week) a week, shown as "
-    f"your_gain_needed ({packages.LONG_SHOT_MY_GAIN} at least for a long shot). "
+    "your_gain_needed. "
     "your_value_lost_per_week is value over replacement you give minus what you get "
     "(each player's points a week above the best free agent at his position, best "
     "player first, depth counted less): above 0 you give more than you get, and "
@@ -138,8 +141,7 @@ ACCEPTANCE_NOTE = (
     "on offers turned down. Completed trades in the league are logged to check it "
     "later."
 )
-GRADE_ORDER = {g: i for i, g in enumerate((*packages.GRADES, packages.NEAR_MISS))}
-TARGETS_TOP, TARGETS_NEAR = 5, 3
+TARGETS_TOP = 5
 
 
 def _offer_item(ctx: context.Context, tid: str, o: packages.Offer, team_needs: dict,
@@ -211,11 +213,7 @@ def trade_targets(con, db, row: LeagueRow, rules: ScoringRules, season: int, wee
     offers = packages.generate(lg, ctx.me, playoff_weighting=playoff_weighting,
                                partners=partners, untradeable=picked, give=tuple(give),
                                position=pos, stakes=st)  # fmt: skip
-    graded, near = [], []
-    for tid, offs in offers.items():
-        for o in offs:
-            (near if o.grade == packages.NEAR_MISS else graded).append((tid, o))
-    near.sort(key=lambda x: -x[1].mine)
+    graded = [(tid, o) for tid, offs in offers.items() for o in offs]
     needs = search.needs(lg)
     # Best trades first (Oct 29): every candidate scored (title odds included), then
     # Likely first and the rest together, by your title-odds gain.
@@ -225,15 +223,12 @@ def trade_targets(con, db, row: LeagueRow, rules: ScoringRules, season: int, wee
         seen: set[str] = set()
         items = [x for x in items if not (x["partner"] in seen or seen.add(x["partner"]))]
     items = items[:TARGETS_TOP]
-    near_items = [_offer_item(ctx, tid, o, needs, picked, playoff_weighting, full=True)
-                  for tid, o in near[:TARGETS_NEAR]]  # fmt: skip
     mine = needs[ctx.me]
     return {
         "your_needs": {pos_: v for pos_, v in sorted(mine.items(), key=lambda kv: -kv[1])},
         "needs_note": "Points a week your starters at each position trail (+) or lead (-) the "
                       "league's middle team there, rest of season.",
         "packages": items,
-        "near_misses": near_items,
         "grades": GRADES_NOTE,
         "acceptance_note": ACCEPTANCE_NOTE,
         "stakes": _stakes_dict(ctx, st),
@@ -241,8 +236,8 @@ def trade_targets(con, db, row: LeagueRow, rules: ScoringRules, season: int, wee
         "searched": {"give": _names(lg, give), "position": pos,
                      "partner": lg.teams[partners[0]].name if partners else "every team",
                      "rule": "the package generator's checks (as trade_packages): your gain at "
-                             "least your_gain_needed, graded Long shot or better; Likely "
-                             "first, then the rest, each by your title-odds gain (then your "
+                             "least your_gain_needed, graded Likely or Fair; Likely "
+                             "first, then Fair, each by your title-odds gain (then your "
                              "gain a week); one per team unless a partner is named; "
                              f"up to {search.MAX_GIVE} players sent and {search.MAX_GET} received"},
         "weeks": lg.weeks, "scoring": ctx.scoring, "as_of": ctx.as_of, "notes": ctx.notes,
@@ -254,6 +249,24 @@ WAIVER_NOTE = (
     "least valuable player dropped, when it adds at least {min} points a week): a trade gets "
     "credit only for what it adds beyond those."
 )
+
+
+def _acceptance(ctx: context.Context, partner: str, give: list[str], get: list[str],
+                res: dict, picked: frozenset[str]) -> dict:  # fmt: skip
+    """The acceptance grade of a trade you name (Oct 29): the generator's score, labelled
+    by its lines alone (your own minimum gain doesn't apply to a trade you chose)."""
+    lg = ctx.league
+    st = _stakes(ctx) or {}
+    cuts = tuple(d["key"] for d in res["them"]["drops"])
+    pk = search.Package(partner, tuple(give), tuple(get), res["you"]["ros_change"],
+                        res["them"]["ros_change"], cuts=cuts)  # fmt: skip
+    score, parts = packages.acceptance(lg, pk, res["them"]["per_week"], picked,
+                                       st.get(partner, 1.0))  # fmt: skip
+    return {"grade": packages.label(score), "score": round(score, 2), **parts,
+            "lines": {g: line for g, line in packages.THRESHOLDS},
+            "note": "How likely they are to accept, from the same score as generated "
+                    "offers: Likely >= 1, Fair >= 0, Stretch >= -1, Long shot >= -3, "
+                    "below that Very unlikely."}  # fmt: skip
 
 
 def _stakes(ctx: context.Context) -> dict[str, float] | None:
@@ -397,7 +410,7 @@ DATASET = "trade_packages"  # precomputed daily after rest of season
 # Bumped when an offer gains fields the tools rely on: a saved run in an older format is
 # recomputed instead of served (Oct 28: a board saved before title odds existed showed
 # none until the next daily run).
-PAYLOAD_VERSION = 6  # 3: stakes; 4: cards; 5: best-first ranking; 6: their value
+PAYLOAD_VERSION = 7  # 3: stakes; 4: cards; 5: best first; 6: their value; 7: Likely/Fair
 
 
 def save_all(warehouse_dir, season: int, week: int, payloads: dict[str, dict],

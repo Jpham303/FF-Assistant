@@ -81,15 +81,17 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    flag, say how much rest-of-season value the user gives up: a lineup gain has to be
    large to justify it. waiver_baseline lists free
    pickups the user (or they) could make right now without trading: the trade is scored
-   after those, so mention them; they're worth doing either way.
+   after those, so mention them; they're worth doing either way. `acceptance` labels
+   how likely the other manager is to say yes (Likely, Fair, Stretch, Long shot, Very
+   unlikely) with its parts: say it.
 12. "Who should I target", "I need a RB, what's realistic", "what can I get for X":
    call trade_targets (never web search). It applies trade_packages' checks to the
-   question asked. Start with the user's biggest needs, then each package, best grade
-   first: what he gives and gets, the grade and its acceptance parts, his gain per week
-   and theirs, the shape (straight swap, sweetener, consolidation), playoff and title odds
-   change,
-   and any free-agent add. Then near_misses, saying what each missed by (grade_note).
-   An empty list means nothing passes the checks: say so, don't loosen them. It only
+   question asked. Start with the user's biggest needs, then each package in the order
+   given (Likely first, then Fair): what he gives and gets, the grade and its acceptance
+   parts, his gain per week and theirs, the shape (straight swap, sweetener,
+   consolidation), playoff and title odds change, and any free-agent add. Only Likely
+   and Fair trades are generated. An empty list means nothing passes the checks: say
+   so, don't loosen them or suggest less likely trades. It only
    suggests: sending an offer is up to the user, in Sleeper.
 13. A player in rest_of_season's not_found has NO projection: say it's missing (a data
    problem to report), never treat him as worth 0 points or compare anyone against him.
@@ -99,10 +101,10 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    search_players and check the team before using any number; if context doesn't
    settle it, ask which one.
 15. "What trades should I offer", "any trades out there", "who would take X": call
-   trade_packages. league_wide is ranked best first: Likely offers, then Fair, Stretch
-   and Long shot together, each by the user's title-odds gain. Present them in that
-   order (never regrouped by grade), then any Near miss (say what it missed by:
-   grade_note). For each: what
+   trade_packages. league_wide is ranked best first: Likely offers, then Fair, each by
+   the user's title-odds gain. Present them in that order. Only Likely and Fair trades
+   are generated or recommended; Stretch and Long shot only label a trade the user
+   names (evaluate_trade). For each: what
    the user gives and gets, his gain a week and theirs, the grade and its acceptance
    parts (their lineup change x their stakes, how it looks, anyone they'd cut; stakes: a
    contender weighs lineup points more, an eliminated team hardly at all), reasons for both sides,
@@ -376,10 +378,10 @@ def trade_targets(give: list[str] | None = None, position: str | None = None,
                   playoff_weighting: bool = False) -> dict:  # fmt: skip
     """Who should I target in a trade? The trade package generator narrowed to the
     question: trades that raise the user's weekly lineup by at least the minimum gain
-    (more when he gives up trade value), graded by how likely the other manager is to
-    accept (Likely, Fair, Stretch, Long shot). Returns up to 5, best grade first (one per
-    team unless partner is set), each fully scored like evaluate_trade, plus up to 3
-    near misses and the user's needs by position. give: players the user is offering
+    (more when he gives up trade value) that the other manager is Likely or Fair to
+    accept. Returns up to 5, Likely first, then Fair, each by title-odds gain (one per
+    team unless partner is set), each fully scored like evaluate_trade, plus the user's
+    needs by position. give: players the user is offering
     (names; empty = any); position: only targets at this position ("I need a RB");
     partner: only this team. Takes up to ~1 min league-wide. Read-only: never proposes anything."""
     try:
@@ -400,14 +402,14 @@ def trade_packages(partner: str | None = None, refresh: bool = False,
                    league: str | None = None, playoff_weighting: bool = False,
                    top: int = 12, full: bool = False) -> dict:  # fmt: skip
     """Trade offers to make, best first: for every opponent in the user's league (or one
-    `partner` team), its best offers where the user gains, graded by how likely they
-    are to be accepted (Likely, Fair, Stretch, Long shot), with both teams' change a
-    week, playoff and title odds, reasons for both sides (with numbers) and what the
-    other manager sees (points per game so far, last 3 games, draft pick, injury).
-    league_wide ranks them all: Likely offers first, then the rest together, each by
-    the user's title-odds gain. Compact by default (the best `top` offers, the fields needed to
-    decide); full=true for every field (large). Precomputed daily; refresh=true
-    recomputes (can take a minute). Read-only: never proposes anything."""
+    `partner` team), its best offers where the user gains and the other manager is Likely
+    or Fair to accept, with both teams' change a week, playoff and title odds, reasons
+    for both sides (with numbers) and what the other manager sees (points per game so
+    far, last 3 games, draft pick, injury). league_wide ranks them all: Likely first,
+    then Fair, each by the user's title-odds gain. Compact by default (the best `top`
+    offers, the fields needed to decide); full=true for every field (large).
+    Precomputed daily; refresh=true recomputes (can take a minute). Read-only: never
+    proposes anything."""
     try:
         params = {
             "refresh": refresh,

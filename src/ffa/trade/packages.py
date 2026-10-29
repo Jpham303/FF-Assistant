@@ -34,7 +34,11 @@ from ffa.trade.core import CLOSE, STREAMABLE, STREAMABLE_SEEN, League, Player, t
 from ffa.trade.search import Package, _distinct, team_pool
 
 GRADES = ("Likely", "Fair", "Stretch", "Long shot")
+# What the engine generates and recommends (Oct 29): Likely, then Fair. Stretch and
+# Long shot only label a trade you name in evaluate_trade.
+GENERATED = ("Likely", "Fair")
 NEAR_MISS = "Near miss"
+UNLIKELY = "Very unlikely"  # a named trade below the Long shot line
 THRESHOLDS = (("Likely", 1.0), ("Fair", 0.0), ("Stretch", -1.0), ("Long shot", -3.0))
 LOOKS_WEIGHT = 0.3  # a perceived point a game they come out ahead = 0.3 a week of score
 # Their trade value (Oct 29): a point a week of value over replacement they give up
@@ -49,9 +53,8 @@ CUT_WEIGHT = 0.3  # cutting a real player hurts: Lamar Jackson (~18 a game) cost
 OFFER_MIN_GAIN = CLOSE
 LONG_SHOT_MY_GAIN = 1.0
 VALUE_RATIO = 0.25  # each point a week of trade value you give up needs 0.25 of gain
-# Offers kept per team: the best 3 Likely and the best 3 others (Fair, Stretch, Long
-# shot together), each a different core deal, by your gain; then everything is ranked
-# by `rank` (Oct 29: best trades first, not one from each grade).
+# Offers kept per team: the best 3 Likely and the best 3 Fair, each a different core
+# deal, by your gain; then everything is ranked by `rank` (Oct 29: best trades first).
 PER_GROUP = 3
 NEAR_SCORE = 0.25  # within this of the next grade (or of Long shot): said, or kept
 NEAR_GAIN = 0.1  # within this under your minimum gain: kept as a near miss
@@ -212,21 +215,27 @@ def generate(lg: League, me: str, *, playoff_weighting: bool = False,
                 parts | {"your_value_lost_per_week": round(lost, 2),
                          "your_gain_needed": round(min_gain(lost), 2)}, note))  # fmt: skip
         out[tid] = []
-        groups = (("Likely",), ("Fair", "Stretch", "Long shot"), (NEAR_MISS,))
-        for gs in groups:
-            ranked = sorted((o for g in gs for o in cands.get(g, [])),
-                            key=lambda o: (-o.mine, -o.score))  # fmt: skip
+        for g in GENERATED:  # Stretch, Long shot and near misses aren't generated
+            ranked = sorted(cands.get(g, []), key=lambda o: (-o.mine, -o.score))
             keep = _distinct(lg, [o.package for o in ranked])
-            picked = [o for o in ranked if o.package in keep]
-            out[tid] += picked[: 1 if gs == (NEAR_MISS,) else PER_GROUP]
+            out[tid] += [o for o in ranked if o.package in keep][:PER_GROUP]
     return out
 
 
+def label(score: float) -> str:
+    """The acceptance grade of any trade by its score alone: for a trade you name
+    (evaluate_trade), where your own minimum gain doesn't apply."""
+    for g, line in THRESHOLDS:
+        if score >= line:
+            return g
+    return UNLIKELY
+
+
 def rank(grade: str, title_change: float | None, mine: float) -> tuple:
-    """Best trades first (Oct 29): Likely offers, then the other graded ones (Fair,
-    Stretch, Long shot together), then near misses; within each, the biggest rise in
-    your title odds first, your gain a week breaking ties."""
-    group = 0 if grade == "Likely" else 1 if grade in GRADES else 2
+    """Best trades first (Oct 29): Likely offers, then Fair (any other grade after);
+    within each, the biggest rise in your title odds first, your gain a week breaking
+    ties."""
+    group = GENERATED.index(grade) if grade in GENERATED else len(GENERATED)
     return (group, -(title_change or 0.0), -mine)
 
 

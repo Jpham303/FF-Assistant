@@ -67,6 +67,12 @@ def test_evaluate_trade_both_sides_free_agent_and_playoff_odds(trade_league):
     assert r["you"]["per_week"] == 13.0 and r["you"]["ros_change"] == 65.0
     assert r["them"]["per_week"] == -4.0 and r["them"]["team_name"] == "Theirs"
     assert r["playoff_odds"]["you"]["after"] > r["playoff_odds"]["you"]["before"]
+    # Oct 29: a trade you name gets the acceptance grade (any grade, by score alone).
+    acc = r["acceptance"]
+    assert acc["grade"] in ("Likely", "Fair", "Stretch", "Long shot", "Very unlikely")
+    from ffa.trade import packages as _P
+
+    assert acc["grade"] == _P.label(acc["score"])
     you = r["playoff_odds"]["you"]
     assert you["change"] == pytest.approx(you["after"] - you["before"], abs=1e-3)
     # One playoff spot here: the title goes to the top seed, so title odds track it.
@@ -127,9 +133,9 @@ def test_trade_targets_service_api_and_tool(trade_league, client):  # noqa: F811
     for p in r["packages"]:  # each one scored like evaluate_trade
         assert p["you"]["ros_change"] > 0 and "verdict" in p and p["shape"]
         # Issue #2: the generator's checks, every time.
-        assert p["grade"] in ("Likely", "Fair", "Stretch", "Long shot")
+        assert p["grade"] in ("Likely", "Fair")  # Oct 29: only these are generated
         assert p["you_per_week"] >= p["acceptance"]["your_gain_needed"]
-    assert all(p["grade"] == "Near miss" for p in r["near_misses"])
+    assert "near_misses" not in r
     assert r["packages"], "the fixture has at least one offer worth making"
     # Best first (Oct 29): Likely, then the rest, each by your title-odds gain.
     assert r["packages"] == sorted(r["packages"], key=packages.item_rank)
@@ -253,7 +259,8 @@ def test_trade_packages_live_saved_api_and_tool(trade_league, client):  # noqa: 
     con = duck.connect(wh)
     r = service.trade_packages(con, db_, row, from_sleeper(row.scoring), SEASON, WEEK,
                                fetch=_schedule)  # fmt: skip
-    assert set(r["grades"]) == {"Likely", "Fair", "Stretch", "Long shot", "Near miss"}
+    assert set(r["grades"]) == {"Likely", "Fair", "generated"}
+    assert all(x["grade"] in ("Likely", "Fair") for x in r["league_wide"])
     assert [t["team"] for t in r["by_team"]] == ["Theirs"]
     # The best offer is Likely, for Quinn (QB 18), and its score is exactly its parts:
     # stakes x their lineup change + how it looks + their value + cuts (Oct 29).
@@ -269,7 +276,7 @@ def test_trade_packages_live_saved_api_and_tool(trade_league, client):  # noqa: 
     assert r["stakes"]["by_team"]["Theirs"] == acc["their_stakes"]
     assert r["league_wide"] == sorted(r["league_wide"], key=packages.item_rank)  # best first
     for x in r["league_wide"]:
-        assert x["grade"] in r["grades"] and x["you_per_week"] >= 0.1
+        assert x["you_per_week"] >= 0.1
         assert x["reasons_you"] and x["reasons_them"] and x["what_they_see"]["reads_as"]
     # Precomputed: what the API serves without refresh.
     service.save_all(wh, SEASON, WEEK, {row.id: r | {"marker": "saved"}})

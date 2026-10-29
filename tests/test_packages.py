@@ -155,21 +155,31 @@ def test_a_named_trade_can_be_any_size():
     assert r["verdict"] and "per_week" in r["you"]
 
 
-def test_best_trades_first_likely_then_the_rest_by_title_odds():
-    """Oct 29: best trades first, not one from each grade: Likely, then Fair, Stretch
-    and Long shot together, each by your title-odds gain, your gain a week breaking ties."""
+def test_best_trades_first_likely_then_fair_by_title_odds():
+    """Oct 29: Likely first, then Fair, each by your title-odds gain (your gain a week
+    breaking ties); anything else after."""
     items = [
         {"grade": "Fair", "title_odds": {"you": {"change": 0.04}}, "you_per_week": 1.0},
         {"grade": "Likely", "title_odds": {"you": {"change": 0.01}}, "you_per_week": 0.6},
-        {"grade": "Long shot", "title_odds": {"you": {"change": 0.06}}, "you_per_week": 2.0},
-        {"grade": "Near miss", "title_odds": {"you": {"change": 0.09}}, "you_per_week": 3.0},
+        {"grade": "Stretch", "title_odds": {"you": {"change": 0.09}}, "you_per_week": 3.0},
         {"grade": "Likely", "title_odds": {"you": {"change": 0.02}}, "you_per_week": 0.5},
-        {"grade": "Stretch", "title_odds": None, "you_per_week": 1.5},
+        {"grade": "Fair", "title_odds": None, "you_per_week": 1.5},
         {"grade": "Fair", "title_odds": {"you": {"change": 0.04}}, "you_per_week": 1.2},
     ]
     got = [(x["grade"], x["you_per_week"]) for x in sorted(items, key=P.item_rank)]
-    assert got == [("Likely", 0.5), ("Likely", 0.6), ("Long shot", 2.0), ("Fair", 1.2),
-                   ("Fair", 1.0), ("Stretch", 1.5), ("Near miss", 3.0)]  # fmt: skip
+    assert got == [("Likely", 0.5), ("Likely", 0.6), ("Fair", 1.2), ("Fair", 1.0),
+                   ("Fair", 1.5), ("Stretch", 3.0)]  # fmt: skip
+
+
+def test_only_likely_and_fair_are_generated_other_grades_label_named_trades():
+    lg = _league()
+    for p in lg.players.values():
+        vals = [v[0] for v in p.weekly.values()]
+        p.per_game = p.ppg = p.last3 = sum(vals) / len(vals)
+    for offs in P.generate(lg, "me").values():
+        assert all(o.grade in P.GENERATED for o in offs)
+    assert [P.label(x) for x in (1.2, 0.0, -0.5, -2.9, -3.1)] == [
+        "Likely", "Fair", "Stretch", "Long shot", "Very unlikely"]  # fmt: skip
 
 
 def test_their_value_loss_is_not_discounted_by_stakes():
