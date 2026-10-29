@@ -43,10 +43,14 @@ SIM = SimParams(p_play={
 })  # fmt: skip
 
 
-def test_play_probability_uses_practice_before_a_status_exists():
-    assert SIM.play_probability(None, DNP, True, prev_out=True, final=False) == 0.01
-    assert SIM.play_probability(None, DNP, True, prev_out=False, final=False) == 0.27
-    assert SIM.play_probability(None, LIMITED, False, final=False) == 0.66  # falls back
+def test_practice_alone_never_moves_the_chance_to_play():
+    """Oct 29: St. Brown and Gibbs, a Wednesday DNP each with no designation, read 20% to
+    play (and ~6 of 10 games after): the 'pending' rates were fitted on Friday's last
+    practice and applied to Wednesday's. Designations drive it; practice alone doesn't."""
+    assert SIM.play_probability(None, DNP, True, final=False) == 1.0
+    assert SIM.play_probability(None, LIMITED, False, final=False) == 1.0
+    # Out last week and listed again with no status yet: last week's designation carries.
+    assert SIM.play_probability(None, DNP, True, final=False, prev_status="Out") == 0.35
     # Final report out, no designation: cleared to play despite the practice
     assert SIM.play_probability(None, DNP, True, prev_out=True, final=True) == 1.0
     assert SIM.play_probability(None, "Full Participation in Practice", True) == 1.0
@@ -67,9 +71,11 @@ def test_barkley_without_second_source_is_a_real_risk():
     row = _statuses(INJURIES, None, 2026, 6).filter(pl.col("key") == BARKLEY).row(0, named=True)
     assert row["injury_status"] is None and row["practice"] == DNP and row["prev_out"]
     assert row["injury_source"] == "nflverse"
+    # Out last week, a DNP and no status yet: last week's Out carries (a real risk), not
+    # the practice report.
     p = SIM.play_probability(row["injury_status"], row["practice"], True, row["prev_out"],
-                             final=False)  # fmt: skip
-    assert p == 0.01
+                             final=False, prev_status=row["prev_status"])  # fmt: skip
+    assert row["prev_status"] == "Out" and p == 0.35
 
 
 def test_final_report_judged_from_designations():
@@ -446,3 +452,11 @@ def test_sleeper_note_and_listing_survive_even_when_nflverse_wins():
     row = _statuses(inj, sl, 2026, 6).filter(pl.col("key") == BARKLEY).row(0, named=True)
     assert row["injury_source"] == "nflverse"
     assert row["note"] == "Limited Wednesday; expected to play"
+
+
+def test_a_missed_practice_without_a_status_is_still_said():
+    """Oct 29: practice doesn't move the chance to play, but the projection says it."""
+    line = startsit.injury_line({"p_play": 1.0, "practice": DNP, "injury": "Ankle",
+                                 "final_report": False, "injury_source": "nflverse"})  # fmt: skip
+    assert line and "Counted as healthy until a designation" in line
+    assert startsit.injury_line({"p_play": 1.0, "practice": DNP, "final_report": True}) is None

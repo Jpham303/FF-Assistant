@@ -20,6 +20,7 @@ import polars as pl
 from ffa.config import settings
 from ffa.ingest.ids import normalize_name
 from ffa.leagues.base import SLOT_ELIGIBILITY
+from ffa.model.sim_params import PENDING_PRACTICE
 from ffa.scoring import breakdown, score
 from ffa.scoring.rules import ScoringRules
 from ffa.service import gamestate, ifactive
@@ -333,6 +334,11 @@ def injury_line(row: dict) -> str | None:
         return (f"No game status yet, but {PRACTICE_SHORT.get(practice, practice)} this week"
                 f"{injury}{prev} [{provenance(row)}]; plays in {p * 100:.0f}% of simulations. "
                 "Statuses usually come with Friday's final report")  # fmt: skip
+    if practice in PENDING_PRACTICE and not row.get("final_report", True):
+        # Oct 29: practice alone doesn't move the chance to play, but it's worth a watch.
+        return (f"No game status yet; {PRACTICE_SHORT.get(practice, practice)} this week"
+                f"{injury} [{provenance(row)}]. Counted as healthy until a designation: "
+                "check Friday's final report")  # fmt: skip
     return None
 
 

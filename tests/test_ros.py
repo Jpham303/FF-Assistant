@@ -248,3 +248,16 @@ def test_this_weeks_rest_of_season_row_comes_from_the_live_weekly_projection():
     assert out.filter(pl.col("target_week") == 9)["expected_points"].to_list() == [13.1, 4.0]
     assert out.filter(pl.col("key") == "b")["target_week"].to_list() == [9]
     assert ros.with_live_week(snap, pl.DataFrame(), 8).equals(snap)  # no live run: as is
+
+
+def test_a_wednesday_dnp_without_a_designation_leaves_later_weeks_healthy():
+    """Oct 29: St. Brown's 20% (a Wednesday DNP) read as 'doubtful' for every later week,
+    ~6 of 10 games. With practice no longer moving this week's chance (1.0), he stays
+    healthy for the weeks after."""
+    st = pl.DataFrame({"key": ["arsb"], "team": ["DET"], "cat": ["healthy"], "role": ["top"]})
+    players = pl.DataFrame({
+        "key": ["arsb"], "injury_status": [None], "p_play": [1.0], "roster_status": ["ACT"],
+        "practice": ["Did Not Participate In Practice"], "designation": [None],
+    })  # fmt: skip
+    got = dict(ros._with_current(st, players).select("key", "cat").iter_rows())
+    assert got == {"arsb": "healthy"}

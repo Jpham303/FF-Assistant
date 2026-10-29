@@ -101,34 +101,33 @@ class SimParams:
         prev_status: str | None = None,
         published: bool = True,
     ) -> float:
-        """P(plays).
+        """P(plays). Designations drive it; practice alone never does (Oct 29).
 
-        - A game designation this week decides it.
-        - Before the team's first report of the week (`published=False`, usually until
-          Wednesday), last week's designation is carried forward: a player Out last week
-          is not assumed healthy just because no new report exists yet.
-        - Before the final report (`final=False`), a missed or limited practice counts, as
-          does having been Out the week before. On a final report, no designation means
-          cleared to play.
+        - A game designation this week decides it (with practice refining a Questionable
+          or Doubtful: those cells were fitted on final reports, as they're used).
+        - No designation yet this week (before the final report): last week's designation
+          is carried forward, so a player Out last week isn't assumed healthy just
+          because Wednesday's report has no status yet. Without one, he's healthy.
+        - A missed or limited practice with no designation doesn't lower it. The
+          "pending" rates were fitted on the weekly report's last practice (Friday) and
+          applied to Wednesday's: St. Brown and Gibbs, a Wednesday DNP each with no
+          status, read 20% to play (Oct 29).
+        - On a final report, no designation means cleared to play.
         """
         r = "role" if role else "depth"
         if status == "Out":
             return 0.0
         if status in (None, "", "Probable", "Note"):
-            if not published and prev_status in CARRY_STATUSES:
+            # Carried: still unconfirmed this week (no report yet, or listed on it with a
+            # practice note but no status). Absent from a published report = healthy.
+            listed = practice is not None
+            unconfirmed = not published or (not final and listed)
+            if prev_status in CARRY_STATUSES and unconfirmed:
                 for key in (f"carry|{prev_status}|{r}", f"carry|{prev_status}|any"):
                     if key in self.p_play:
                         return self.p_play[key]
                 return CARRY_FALLBACK[prev_status]
-            # On a final report no designation means cleared to play.
-            if final or practice not in PENDING_PRACTICE:
-                return 1.0
-            prev = "prev_out" if prev_out else "prev_ok"
-            for key in (f"pending|{practice}|{r}|{prev}", f"pending|{practice}|{r}|any",
-                        f"pending|{practice}|any|any"):  # fmt: skip
-                if key in self.p_play:
-                    return self.p_play[key]
-            return 1.0
+            return 1.0  # no designation: healthy, whatever practice said
         for key in (f"{status}|{practice}|{r}", f"{status}|any|{r}", f"{status}|any|any"):
             if key in self.p_play:
                 return self.p_play[key]
