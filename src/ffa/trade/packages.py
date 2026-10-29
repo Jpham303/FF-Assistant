@@ -34,10 +34,10 @@ from ffa.trade.core import CLOSE, STREAMABLE, STREAMABLE_SEEN, League, Player, t
 from ffa.trade.search import Package, _distinct, team_pool
 
 GRADES = ("Likely", "Fair", "Stretch", "Long shot")
-# What the engine generates (Oct 29, revised): every Likely or Fair deal that raises
-# your title odds (tier 1), then Stretch and Long shot deals that do (tier 2).
+# What the engine generates (Oct 29, final): grade first. Likely, then Fair; Stretch and
+# Long shot only when no Likely or Fair deal exists. Every one must raise your title odds.
 GENERATED = ("Likely", "Fair", "Stretch", "Long shot")
-TIER = {"Likely": 1, "Fair": 1, "Stretch": 2, "Long shot": 2}
+TIER = {"Likely": 1, "Fair": 1, "Stretch": 2, "Long shot": 2}  # tier 2 = fallback only
 NEAR_MISS = "Near miss"
 UNLIKELY = "Very unlikely"  # a named trade below the Long shot line
 THRESHOLDS = (("Likely", 1.0), ("Fair", 0.0), ("Stretch", -1.0), ("Long shot", -3.0))
@@ -235,10 +235,9 @@ def label(score: float) -> str:
 
 
 def rank(grade: str, title_change: float | None, mine: float) -> tuple:
-    """Best trades first (Oct 29): tier 1 (Likely and Fair together), then tier 2
-    (Stretch and Long shot); within each, the biggest rise in your title odds first, your
-    gain a week breaking ties."""
-    group = TIER.get(grade, 3)
+    """Grade first (Oct 29): Likely, then Fair, then Stretch, then Long shot; within a
+    grade, the biggest rise in your title odds first, your gain a week breaking ties."""
+    group = GENERATED.index(grade) if grade in GENERATED else len(GENERATED)
     return (group, -(title_change or 0.0), -mine)
 
 
@@ -283,3 +282,12 @@ def helps_title(x: dict) -> bool:
     title odds can't be simulated, your lineup gain stands in."""
     title = (x.get("title_odds") or {}).get("you")
     return title["change"] > 0 if title else x["you_per_week"] > 0
+
+
+def recommend(items: list[dict]) -> tuple[list[dict], bool]:
+    """(what to recommend, fallback): deals that raise your title odds, grade first.
+    Only Likely and Fair when any exists; Stretch and Long shot only when none does
+    (fallback=True)."""
+    ok = sorted((x for x in items if helps_title(x)), key=item_rank)
+    first = [x for x in ok if TIER.get(x["grade"]) == 1]
+    return (first, False) if first else (ok, bool(ok))

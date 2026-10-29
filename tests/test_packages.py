@@ -156,23 +156,28 @@ def test_a_named_trade_can_be_any_size():
     assert r["verdict"] and "per_week" in r["you"]
 
 
-def test_best_trades_first_two_tiers_by_title_odds():
-    """Oct 29: every Likely or Fair deal first (together, by your title-odds gain), then
-    Stretch and Long shot (the same way); your gain a week breaks ties."""
+def test_grade_first_then_title_odds_with_stretch_only_as_a_fallback():
+    """Oct 29 (final): grade first: Likely, then Fair, each by your title-odds gain (your
+    gain a week breaking ties); Stretch and Long shot only when no Likely or Fair deal
+    raises your title odds; nothing that doesn't raise them."""
     items = [
         {"grade": "Fair", "title_odds": {"you": {"change": 0.04}}, "you_per_week": 1.0},
         {"grade": "Likely", "title_odds": {"you": {"change": 0.01}}, "you_per_week": 0.6},
         {"grade": "Stretch", "title_odds": {"you": {"change": 0.09}}, "you_per_week": 3.0},
         {"grade": "Likely", "title_odds": {"you": {"change": 0.02}}, "you_per_week": 0.5},
-        {"grade": "Long shot", "title_odds": {"you": {"change": 0.03}}, "you_per_week": 1.5},
+        {"grade": "Long shot", "title_odds": {"you": {"change": 0.06}}, "you_per_week": 1.5},
         {"grade": "Fair", "title_odds": {"you": {"change": 0.04}}, "you_per_week": 1.2},
+        {"grade": "Likely", "title_odds": {"you": {"change": -0.01}}, "you_per_week": 0.9},
     ]
-    got = [(x["grade"], x["you_per_week"]) for x in sorted(items, key=P.item_rank)]
-    assert got == [("Fair", 1.2), ("Fair", 1.0), ("Likely", 0.5), ("Likely", 0.6),
-                   ("Stretch", 3.0), ("Long shot", 1.5)]  # fmt: skip
-    assert P.helps_title(items[0]) and not P.helps_title(
-        {"grade": "Fair", "title_odds": {"you": {"change": -0.01}}, "you_per_week": 2.0}
-    )
+    shown, fallback = P.recommend(items)
+    assert [(x["grade"], x["you_per_week"]) for x in shown] == [
+        ("Likely", 0.5), ("Likely", 0.6), ("Fair", 1.2), ("Fair", 1.0)]  # fmt: skip
+    assert not fallback  # Stretch +9 and Long shot +6 stay out: Likely/Fair deals exist
+    # No Likely or Fair deal raises your odds: then Stretch, then Long shot.
+    rest, fallback = P.recommend([x for x in items if x["grade"] in ("Stretch", "Long shot")]
+                                 + [items[-1]])  # fmt: skip
+    assert fallback and [x["grade"] for x in rest] == ["Stretch", "Long shot"]
+    assert P.recommend([]) == ([], False)
     assert P.helps_title({"grade": "Fair", "title_odds": None, "you_per_week": 0.6})
 
 

@@ -212,8 +212,9 @@ def build(lg: core.League, offers: list[dict], player_games: pl.DataFrame,
           team_games: pl.DataFrame, season: int, week: int, *,
           owners: dict[str, str], last_week: int, position: str | None = None,
           top: int = 8) -> list[dict]:  # fmt: skip
-    """Cards for the best `top` targets, best first: his best deal's tier (Likely or
-    Fair, then Stretch or Long shot), then your title-odds gain (then your gain a week).
+    """Cards for the best `top` targets, best first: his best deal's grade (Likely, then
+    Fair; the offers hold Stretch and Long shot only as a fallback), then your
+    title-odds gain (then your gain a week).
     offers: trade_packages' league_wide items (deals that raise your title odds).
     owners: player key -> team name."""
     by_target: dict[str, list[dict]] = {}
@@ -228,7 +229,7 @@ def build(lg: core.League, offers: list[dict], player_games: pl.DataFrame,
     for xs in by_target.values():
         xs.sort(key=_deal_key)
 
-    def rank_key(item):  # his best deal's rank: tier, then title-odds gain
+    def rank_key(item):  # his best deal's rank: grade, then title-odds gain
         return _deal_key(item[1][0])
 
     ranked = sorted(by_target.items(), key=rank_key)[:top]

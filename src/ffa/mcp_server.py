@@ -87,7 +87,8 @@ baselines on start/sit accuracy). Rules for answering with these tools:
 12. "Who should I target", "I need a RB, what's realistic", "what can I get for X":
    call trade_targets (never web search). It applies trade_packages' checks to the
    question asked. Start with the user's biggest needs, then each package in the order
-   given (Likely and Fair first, then Stretch and Long shot, each by title-odds gain):
+   given (grade first: Likely, then Fair, each by title-odds gain; Stretch and Long shot
+   appear only when `fallback` is true, i.e. no Likely or Fair deal exists: say so):
    what he gives and gets, the grade and its acceptance parts, his gain per week and
    theirs, the shape (straight swap, sweetener, consolidation), playoff and title odds
    change, and any free-agent add. Only trades that raise the user's title odds are
@@ -101,10 +102,9 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    search_players and check the team before using any number; if context doesn't
    settle it, ask which one.
 15. "What trades should I offer", "any trades out there", "who would take X": call
-   trade_packages. league_wide holds every deal that raises the user's title odds,
-   ranked: first all Likely and Fair deals together, then Stretch and Long shot deals,
-   each tier by title-odds gain. Present them in that order and say which tier each
-   is in. For each: what
+   trade_packages. league_wide is what to recommend, grade first: Likely, then Fair,
+   each by title-odds gain; Stretch and Long shot appear only when `fallback` is true
+   (no Likely or Fair deal raises the user's title odds): say so plainly. For each: what
    the user gives and gets, his gain a week and theirs, the grade and its acceptance
    parts (their lineup change x their stakes, how it looks, anyone they'd cut; stakes: a
    contender weighs lineup points more, an eliminated team hardly at all), reasons for both sides,
@@ -146,6 +146,10 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    Them: ±x.x pts/wk · playoff odds a -> b · title odds a -> b
    Mention other_deals in one line each, with both sides' pts/wk. Never add facts that
    aren't on the card.
+20. Trade order is GRADE FIRST, always: Likely, then Fair, and only when there are none,
+   Stretch and Long shot. Present trades in exactly the order a tool returns them. Never
+   re-sort or headline them by title odds, points a week or confidence ("top deals by
+   title gain" is wrong). Title-odds gain only orders trades within the same grade.
 """
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
@@ -379,9 +383,10 @@ def trade_targets(give: list[str] | None = None, position: str | None = None,
     """Who should I target in a trade? The trade package generator narrowed to the
     question: trades that raise the user's weekly lineup by at least the minimum gain
     (more when he gives up trade value) and raise his title odds. Returns up to 5:
-    Likely and Fair deals first, then Stretch and Long shot, each by title-odds gain
-    (one per team unless partner is set), each fully scored like evaluate_trade, plus
-    the user's needs by position. give: players the user is offering
+    grade first (Likely, then Fair; Stretch and Long shot only when no Likely or Fair
+    deal exists), each grade by title-odds gain (one per team unless partner is set),
+    each fully scored like evaluate_trade, plus the user's needs by position. give:
+    players the user is offering
     (names; empty = any); position: only targets at this position ("I need a RB");
     partner: only this team. Takes up to ~1 min league-wide. Read-only: never proposes anything."""
     try:
@@ -405,9 +410,10 @@ def trade_packages(partner: str | None = None, refresh: bool = False,
     `partner` team), every deal that raises the user's title odds, with both teams'
     change a week, playoff and title odds, reasons for both sides (with numbers) and
     what the other manager sees (points per game so far, last 3 games, draft pick,
-    injury). league_wide ranks them: Likely and Fair first, then Stretch and Long shot,
-    each by the user's title-odds gain. Compact by default (the best `top`
-    offers, the fields needed to decide); full=true for every field (large).
+    injury). league_wide ranks them grade first: Likely, then Fair (Stretch and Long
+    shot only when neither exists), each grade by the user's title-odds gain. Compact
+    by default (the best `top` offers, the fields needed to decide); full=true for every
+    field (large).
     Precomputed daily; refresh=true recomputes (can take a minute). Read-only: never
     proposes anything."""
     try:
