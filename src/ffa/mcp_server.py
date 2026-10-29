@@ -117,14 +117,15 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    who is back. Say "out for the season" only if a tool says so (a season-ending reserve
    listing or note). No return date exists in this data: never invent one; say what the
    reports show (e.g. "practicing in full, upgraded to Questionable: on track to return").
-17. Every trade, every tool: show BOTH sides' gain or loss, never only the user's: points
-   a week, playoff odds change and title odds change, for the user and for the other
-   team, e.g. a two-row table (You | Them) or "You: +1.2 a week, playoffs 54% -> 61%,
-   title 9% -> 12%. Them: -0.4 a week, playoffs 40% -> 37%, title 5% -> 4%". Compact
-   offers group these under `you` and `them`; the full form has per_week (you_per_week /
-   them_per_week), playoff_odds and title_odds (before, after, change). Title odds
-   simulate the league's bracket (seeding, byes, round lengths). If title_odds is null,
-   say it's unavailable and why (notes).
+17. Every trade, every tool, every format (card, list or table): show BOTH sides' gain or
+   loss, never only the user's: points a week, playoff odds change and title odds change,
+   for the user and for the other team. In a table of trades, these columns are
+   required: You/wk, Them/wk, Playoff odds (you), Title odds (you), plus the other team's
+   odds when space allows; e.g. "You: +1.2 a week, playoffs 54% -> 61%, title 9% -> 12%.
+   Them: -0.4 a week, playoffs 40% -> 37%, title 5% -> 4%". Compact offers group these
+   under `you` and `them`; the full form has you_per_week / them_per_week, playoff_odds
+   and title_odds (before, after, change). Title odds simulate the league's bracket
+   (seeding, byes, round lengths). If title_odds is null, say it's unavailable and why.
 18. Trades from trade_packages and trade_targets are ALTERNATIVES, each scored on its own
    against the user's current roster (after the free waiver moves): never present them
    as a sequence ("do this, then that"), never combine two, and never assume a player
@@ -137,8 +138,11 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    N deal(s) · M he could say yes to
    summary. **Watch:** the watch lines, joined (omit Watch if empty).
    Then the best deal: `level/5 · LABEL` with partner · acceptance; You give (name POS,
-   one per line) | You get (same); title odds before -> after · playoff pts/wk (signed) ·
-   usable value (signed %). Mention other_deals in one line each. Never add facts that
+   one per line) | You get (same); then two lines:
+   You: +x.x pts/wk · playoff odds a -> b · title odds a -> b · playoff pts/wk ±x.x ·
+   usable value ±x%
+   Them: ±x.x pts/wk · playoff odds a -> b · title odds a -> b
+   Mention other_deals in one line each, with both sides' pts/wk. Never add facts that
    aren't on the card.
 """
 

@@ -197,6 +197,7 @@ def deal(lg: core.League, x: dict, n_playoff_weeks: int) -> dict:
                                     if pw is not None and n_playoff_weeks else None),
         "usable_value_change_pct": uv,
         "you_per_week": x["you_per_week"], "them_per_week": x["them_per_week"],
+        "their_playoff_odds": _pct((x.get("playoff_odds") or {}).get("them")),
         "their_title_odds": _pct(them_title),
     }  # fmt: skip
 
