@@ -99,8 +99,10 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    search_players and check the team before using any number; if context doesn't
    settle it, ask which one.
 15. "What trades should I offer", "any trades out there", "who would take X": call
-   trade_packages. Lead with league_wide's Likely and Fair offers, then the best Stretch
-   and Long shot, then any Near miss (say what it missed by: grade_note). For each: what
+   trade_packages. league_wide is ranked best first: Likely offers, then Fair, Stretch
+   and Long shot together, each by the user's title-odds gain. Present them in that
+   order (never regrouped by grade), then any Near miss (say what it missed by:
+   grade_note). For each: what
    the user gives and gets, his gain a week and theirs, the grade and its acceptance
    parts (their lineup change x their stakes, how it looks, anyone they'd cut; stakes: a
    contender weighs lineup points more, an eliminated team hardly at all), reasons for both sides,
@@ -393,13 +395,13 @@ def trade_targets(give: list[str] | None = None, position: str | None = None,
 def trade_packages(partner: str | None = None, refresh: bool = False,
                    league: str | None = None, playoff_weighting: bool = False,
                    top: int = 12, full: bool = False) -> dict:  # fmt: skip
-    """Trade offers to make: for every opponent in the user's league (or one `partner`
-    team), the best offer in each acceptance grade (Likely, Fair, Stretch, Long shot)
-    where the user gains, with both lineups' change per week, playoff and title odds,
-    reasons for
-    both sides (with numbers) and what the other manager sees (points per game so far,
-    last 3 games, draft pick, injury). league_wide lists them all, Likely first, by the
-    user's gain. Compact by default (the best `top` offers, the fields needed to
+    """Trade offers to make, best first: for every opponent in the user's league (or one
+    `partner` team), its best offers where the user gains, graded by how likely they
+    are to be accepted (Likely, Fair, Stretch, Long shot), with both teams' change a
+    week, playoff and title odds, reasons for both sides (with numbers) and what the
+    other manager sees (points per game so far, last 3 games, draft pick, injury).
+    league_wide ranks them all: Likely offers first, then the rest together, each by
+    the user's title-odds gain. Compact by default (the best `top` offers, the fields needed to
     decide); full=true for every field (large). Precomputed daily; refresh=true
     recomputes (can take a minute). Read-only: never proposes anything."""
     try:

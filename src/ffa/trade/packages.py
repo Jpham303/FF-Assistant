@@ -40,8 +40,10 @@ CUT_WEIGHT = 0.3  # cutting a real player hurts: Lamar Jackson (~18 a game) cost
 OFFER_MIN_GAIN = CLOSE
 LONG_SHOT_MY_GAIN = 1.0
 VALUE_RATIO = 0.25  # each point a week of trade value you give up needs 0.25 of gain
-PER_GRADE = 2  # offers per grade per team, each a different core deal (Oct 27: one slot
-# per grade hid Jameson + Barkley for Hubbard behind Barkley for Jones)
+# Offers kept per team: the best 3 Likely and the best 3 others (Fair, Stretch, Long
+# shot together), each a different core deal, by your gain; then everything is ranked
+# by `rank` (Oct 29: best trades first, not one from each grade).
+PER_GROUP = 3
 NEAR_SCORE = 0.25  # within this of the next grade (or of Long shot): said, or kept
 NEAR_GAIN = 0.1  # within this under your minimum gain: kept as a near miss
 LOOKS_EVEN = 0.10  # for 'reads as': perceived values within 10% read as even
@@ -195,12 +197,28 @@ def generate(lg: League, me: str, *, playoff_weighting: bool = False,
                 parts | {"your_value_lost_per_week": round(lost, 2),
                          "your_gain_needed": round(min_gain(lost), 2)}, note))  # fmt: skip
         out[tid] = []
-        for g in (*GRADES, NEAR_MISS):
-            ranked = sorted(cands.get(g, []), key=lambda o: (-o.mine, -o.score))
+        groups = (("Likely",), ("Fair", "Stretch", "Long shot"), (NEAR_MISS,))
+        for gs in groups:
+            ranked = sorted((o for g in gs for o in cands.get(g, [])),
+                            key=lambda o: (-o.mine, -o.score))  # fmt: skip
             keep = _distinct(lg, [o.package for o in ranked])
             picked = [o for o in ranked if o.package in keep]
-            out[tid] += picked[: 1 if g == NEAR_MISS else PER_GRADE]
+            out[tid] += picked[: 1 if gs == (NEAR_MISS,) else PER_GROUP]
     return out
+
+
+def rank(grade: str, title_change: float | None, mine: float) -> tuple:
+    """Best trades first (Oct 29): Likely offers, then the other graded ones (Fair,
+    Stretch, Long shot together), then near misses; within each, the biggest rise in
+    your title odds first, your gain a week breaking ties."""
+    group = 0 if grade == "Likely" else 1 if grade in GRADES else 2
+    return (group, -(title_change or 0.0), -mine)
+
+
+def item_rank(x: dict) -> tuple:
+    """`rank` for a scored offer (trade_packages / trade_targets item)."""
+    title = (x.get("title_odds") or {}).get("you") or {}
+    return rank(x["grade"], title.get("change"), x["you_per_week"])
 
 
 def reasons(lg: League, offer: Offer, evaluation: dict, team_needs: dict[str, float],

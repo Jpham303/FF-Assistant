@@ -11,7 +11,7 @@ import pytest
 from ffa.db.models import LeagueRow, RosterEntryRow, TeamRow
 from ffa.scoring.rules import from_sleeper
 from ffa.service import gamestate, ros
-from ffa.trade import service
+from ffa.trade import packages, service
 from ffa.warehouse import duck, store
 from tests.test_api import SEASON, WEEK, client, db, warehouse  # noqa: F401  (fixtures)
 
@@ -131,9 +131,8 @@ def test_trade_targets_service_api_and_tool(trade_league, client):  # noqa: F811
         assert p["you_per_week"] >= p["acceptance"]["your_gain_needed"]
     assert all(p["grade"] == "Near miss" for p in r["near_misses"])
     assert r["packages"], "the fixture has at least one offer worth making"
-    grades = [p["grade"] for p in r["packages"]]
-    order = ["Likely", "Fair", "Stretch", "Long shot"]
-    assert grades == sorted(grades, key=order.index)  # best grade first
+    # Best first (Oct 29): Likely, then the rest, each by your title-odds gain.
+    assert r["packages"] == sorted(r["packages"], key=packages.item_rank)
     # Nothing here that trade_packages wouldn't offer the same team.
     pk_all = service.trade_packages(con, db_, row, from_sleeper(row.scoring), SEASON, WEEK,
                                     fetch=_schedule)  # fmt: skip
@@ -271,6 +270,7 @@ def test_trade_packages_live_saved_api_and_tool(trade_league, client):  # noqa: 
     assert acc["how_it_looks"] == -0.57 and acc["their_lineup"] == 3.0
     assert acc["score"] == pytest.approx(acc["their_stakes"] * 3.0 - 0.57, abs=0.01)
     assert acc["score"] >= 1.0 and r["stakes"]["by_team"]["Theirs"] == acc["their_stakes"]
+    assert r["league_wide"] == sorted(r["league_wide"], key=packages.item_rank)  # best first
     for x in r["league_wide"]:
         assert x["grade"] in r["grades"] and x["you_per_week"] >= 0.1
         assert x["reasons_you"] and x["reasons_them"] and x["what_they_see"]["reads_as"]

@@ -202,16 +202,17 @@ def deal(lg: core.League, x: dict, n_playoff_weeks: int) -> dict:
 
 
 def _deal_key(x: dict) -> tuple:
-    title = (x.get("title_odds") or {}).get("you") or {}
-    return (GRADE_ORDER.get(x["grade"], 9), -(title.get("change") or 0.0), -x["you_per_week"])
+    from ffa.trade.packages import item_rank
+
+    return item_rank(x)
 
 
 def build(lg: core.League, offers: list[dict], player_games: pl.DataFrame,
           team_games: pl.DataFrame, season: int, week: int, *,
           owners: dict[str, str], last_week: int, position: str | None = None,
           top: int = 8) -> list[dict]:  # fmt: skip
-    """Cards for the best `top` targets, best first: ranked by your title-odds gain in
-    his best deal (then grade, then your gain a week). offers: trade_packages'
+    """Cards for the best `top` targets, best first: his best deal Likely first, then
+    the rest, each by your title-odds gain (then your gain a week). offers: trade_packages'
     league_wide items (near misses left out). owners: player key -> team name."""
     by_target: dict[str, list[dict]] = {}
     for x in offers:
@@ -225,10 +226,8 @@ def build(lg: core.League, offers: list[dict], player_games: pl.DataFrame,
     for xs in by_target.values():
         xs.sort(key=_deal_key)
 
-    def rank_key(item):
-        _k, xs = item
-        title = (xs[0].get("title_odds") or {}).get("you") or {}
-        return (-(title.get("change") or 0.0), GRADE_ORDER[xs[0]["grade"]], -xs[0]["you_per_week"])
+    def rank_key(item):  # his best deal's rank: Likely first, then by title-odds gain
+        return _deal_key(item[1][0])
 
     ranked = sorted(by_target.items(), key=rank_key)[:top]
     sched = schedule_ranks(player_games, team_games, season, week, last_week)

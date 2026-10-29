@@ -212,15 +212,16 @@ def trade_targets(con, db, row: LeagueRow, rules: ScoringRules, season: int, wee
     for tid, offs in offers.items():
         for o in offs:
             (near if o.grade == packages.NEAR_MISS else graded).append((tid, o))
-    rank = lambda x: (GRADE_ORDER[x[1].grade], -x[1].mine)  # noqa: E731
-    graded.sort(key=rank)
     near.sort(key=lambda x: -x[1].mine)
+    needs = search.needs(lg)
+    # Best trades first (Oct 29): every candidate scored (title odds included), then
+    # Likely first and the rest together, by your title-odds gain.
+    items = sorted((_offer_item(ctx, tid, o, needs, picked, playoff_weighting, full=True)
+                    for tid, o in graded), key=packages.item_rank)  # fmt: skip
     if not partners:  # league-wide: each team's best, so the list isn't one roster
         seen: set[str] = set()
-        graded = [x for x in graded if not (x[0] in seen or seen.add(x[0]))]
-    needs = search.needs(lg)
-    items = [_offer_item(ctx, tid, o, needs, picked, playoff_weighting, full=True)
-             for tid, o in graded[:TARGETS_TOP]]  # fmt: skip
+        items = [x for x in items if not (x["partner"] in seen or seen.add(x["partner"]))]
+    items = items[:TARGETS_TOP]
     near_items = [_offer_item(ctx, tid, o, needs, picked, playoff_weighting, full=True)
                   for tid, o in near[:TARGETS_NEAR]]  # fmt: skip
     mine = needs[ctx.me]
@@ -237,8 +238,9 @@ def trade_targets(con, db, row: LeagueRow, rules: ScoringRules, season: int, wee
         "searched": {"give": _names(lg, give), "position": pos,
                      "partner": lg.teams[partners[0]].name if partners else "every team",
                      "rule": "the package generator's checks (as trade_packages): your gain at "
-                             "least your_gain_needed, graded Long shot or better; best grade "
-                             f"first, then your gain; one per team unless a partner is named; "
+                             "least your_gain_needed, graded Long shot or better; Likely "
+                             "first, then the rest, each by your title-odds gain (then your "
+                             "gain a week); one per team unless a partner is named; "
                              f"up to {search.MAX_GIVE} players sent and {search.MAX_GET} received"},
         "weeks": lg.weeks, "scoring": ctx.scoring, "as_of": ctx.as_of, "notes": ctx.notes,
     }  # fmt: skip
@@ -342,7 +344,9 @@ def trade_packages(con, db, row: LeagueRow, rules: ScoringRules, season: int, we
         items = [_offer_item(ctx, tid, o, team_needs, picked, playoff_weighting) for o in offs]
         flat += items
         by_team.append({"team": lg.teams[tid].name, "packages": items})
-    flat.sort(key=lambda x: (GRADE_ORDER[x["grade"]], -x["you_per_week"]))
+    flat.sort(key=packages.item_rank)
+    for t in by_team:
+        t["packages"].sort(key=packages.item_rank)
     return {
         "grades": GRADES_NOTE,
         "acceptance_note": ACCEPTANCE_NOTE,
@@ -390,7 +394,7 @@ DATASET = "trade_packages"  # precomputed daily after rest of season
 # Bumped when an offer gains fields the tools rely on: a saved run in an older format is
 # recomputed instead of served (Oct 28: a board saved before title odds existed showed
 # none until the next daily run).
-PAYLOAD_VERSION = 4  # 3: stakes-weighted acceptance; 4: keys, usable value (cards)
+PAYLOAD_VERSION = 5  # 3: stakes; 4: keys, usable value (cards); 5: best-first ranking
 
 
 def save_all(warehouse_dir, season: int, week: int, payloads: dict[str, dict],
@@ -467,8 +471,8 @@ def trade_cards(con, db, row: LeagueRow, rules: ScoringRules, season: int, week:
 
 
 CARDS_NOTE = (
-    "One card per player you could get, best first (by your title-odds gain in his best "
-    "deal). deals: offers that bring him in; could_say_yes: those graded Likely or Fair. "
+    "One card per player you could get, best first: his best deal graded Likely first, "
+    "then the rest, each by your title-odds gain. deals: offers that bring him in; could_say_yes: those graded Likely or Fair. "
     "confidence: 1-5 from p_ahead, your chance of coming out ahead over the rest of the "
     "season (5: 90%+, 4: 75-90%, 3: 60-75%, 2: 50-60%, 1: under 50%). acceptance: the "
     "grade in words (likely, plausible, a stretch, a long shot). playoff_points_per_week: "

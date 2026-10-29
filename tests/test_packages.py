@@ -77,9 +77,9 @@ def test_generate_on_hand_built_rosters():
     offers = out["them"]
     assert offers, "RB3 for WR3 (+8 a week for you, even for them) at least"
     grades = [o.grade for o in offers]
-    order = [*P.GRADES, P.NEAR_MISS]
-    assert grades == sorted(grades, key=order.index)  # Likely first
-    assert all(grades.count(g) <= P.PER_GRADE for g in set(grades))  # up to 2 a grade
+    # Oct 29: up to 3 Likely and 3 others (Fair/Stretch/Long shot together) a team.
+    assert grades.count("Likely") <= P.PER_GROUP
+    assert sum(g in ("Fair", "Stretch", "Long shot") for g in grades) <= P.PER_GROUP
     for o in offers:
         assert o.mine >= P.OFFER_MIN_GAIN - P.NEAR_GAIN
         assert P.grade(o.mine, o.score)[0] == o.grade
@@ -146,3 +146,20 @@ def test_a_named_trade_can_be_any_size():
     r = core.evaluate(lg, "me", "them", give=["RB2", "RB3", "WR1", "WR2"],
                       get=["WR3", "WR4", "WR5"])  # fmt: skip
     assert r["verdict"] and "per_week" in r["you"]
+
+
+def test_best_trades_first_likely_then_the_rest_by_title_odds():
+    """Oct 29: best trades first, not one from each grade: Likely, then Fair, Stretch
+    and Long shot together, each by your title-odds gain, your gain a week breaking ties."""
+    items = [
+        {"grade": "Fair", "title_odds": {"you": {"change": 0.04}}, "you_per_week": 1.0},
+        {"grade": "Likely", "title_odds": {"you": {"change": 0.01}}, "you_per_week": 0.6},
+        {"grade": "Long shot", "title_odds": {"you": {"change": 0.06}}, "you_per_week": 2.0},
+        {"grade": "Near miss", "title_odds": {"you": {"change": 0.09}}, "you_per_week": 3.0},
+        {"grade": "Likely", "title_odds": {"you": {"change": 0.02}}, "you_per_week": 0.5},
+        {"grade": "Stretch", "title_odds": None, "you_per_week": 1.5},
+        {"grade": "Fair", "title_odds": {"you": {"change": 0.04}}, "you_per_week": 1.2},
+    ]
+    got = [(x["grade"], x["you_per_week"]) for x in sorted(items, key=P.item_rank)]
+    assert got == [("Likely", 0.5), ("Likely", 0.6), ("Long shot", 2.0), ("Fair", 1.2),
+                   ("Fair", 1.0), ("Stretch", 1.5), ("Near miss", 3.0)]  # fmt: skip
