@@ -371,12 +371,12 @@ def trade_packages(con, db, row: LeagueRow, rules: ScoringRules, season: int, we
         items = [_offer_item(ctx, tid, o, team_needs, picked, playoff_weighting) for o in offs]
         flat += items
         by_team.append({"team": lg.teams[tid].name, "packages": items})
-    # Grade first; Stretch and Long shot only if no Likely or Fair deal raises your odds.
+    # Grade first; Stretch and Long shot only if no Likely or Fair deal raises your odds:
+    # league-wide over everyone, and per team over that team alone (Oct 30: a partner
+    # with only Stretch deals showed nothing, since other teams had Likely ones).
     flat, fallback = packages.recommend(flat)
-    shown = {id(x) for x in flat}
     for t in by_team:
-        t["packages"] = sorted((x for x in t["packages"] if id(x) in shown),
-                               key=packages.item_rank)  # fmt: skip
+        t["packages"], t["fallback"] = packages.recommend(t["packages"])
     return {
         "grades": GRADES_NOTE,
         "acceptance_note": ACCEPTANCE_NOTE,
@@ -426,7 +426,7 @@ DATASET = "trade_packages"  # precomputed daily after rest of season
 # Bumped when an offer gains fields the tools rely on: a saved run in an older format is
 # recomputed instead of served (Oct 28: a board saved before title odds existed showed
 # none until the next daily run).
-PAYLOAD_VERSION = 9  # 3: stakes; 4: cards; 6: their value; 9: grade first + fallback
+PAYLOAD_VERSION = 10  # 4: cards; 6: their value; 9: grade first; 10: per-team fallback
 
 
 def save_all(warehouse_dir, season: int, week: int, payloads: dict[str, dict],

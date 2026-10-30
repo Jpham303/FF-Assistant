@@ -463,11 +463,12 @@ def trade_packages(league: str | None = None, partner: str | None = None,
     if not (refresh or playoff_weighting):
         saved = trade_service.saved_packages(con, row.id, season, w)
         if saved is not None:
-            if partner:
+            if partner:  # that team's own list, with its own fallback (Oct 30)
                 want = partner.lower()
                 saved["by_team"] = [t for t in saved["by_team"] if t["team"].lower() == want]
-                saved["league_wide"] = [x for x in saved["league_wide"]
-                                        if x["partner"].lower() == want]  # fmt: skip
+                team = saved["by_team"][0] if saved["by_team"] else {}
+                saved["league_wide"] = list(team.get("packages", []))
+                saved["fallback"] = bool(team.get("fallback", False))
             return _shape(saved, compact, top) | {"league": row.name, "season": season,
                                                   "from_week": w}  # fmt: skip
     rules, _label = _rules(row)

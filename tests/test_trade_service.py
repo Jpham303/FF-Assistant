@@ -406,3 +406,29 @@ def test_trade_cards_service_api_and_tool(trade_league, client):  # noqa: F811
         assert t["cards"] and "how_to_read" in t
     finally:
         mcp_server.set_client(None)
+
+
+def test_a_partner_with_only_stretch_deals_falls_back_from_the_saved_board(trade_league, client):  # noqa: F811,E501
+    """Oct 30: trade_packages with a partner returned 0 offers and fallback false when
+    that team had only Stretch / Long shot deals (other teams' Likely deals had pushed
+    them out of the saved league-wide list)."""
+    db_, row, wh = trade_league
+    con = duck.connect(wh)
+    r = service.trade_packages(con, db_, row, from_sleeper(row.scoring), SEASON, WEEK,
+                               fetch=_schedule)  # fmt: skip
+    up = {"you": {"change": 0.02}}
+    likely = {"grade": "Likely", "partner": "Others", "title_odds": up, "you_per_week": 1.0,
+              "give": ["x"], "get": ["y"]}  # fmt: skip
+    stretch = {"grade": "Stretch", "partner": "Theirs", "title_odds": up, "you_per_week": 2.0,
+               "give": ["a"], "get": ["b"]}  # fmt: skip
+    board = r | {
+        "league_wide": [likely], "fallback": False,
+        "by_team": [{"team": "Others", "packages": [likely], "fallback": False},
+                    {"team": "Theirs", "packages": [stretch], "fallback": True}],
+    }  # fmt: skip
+    service.save_all(wh, SEASON, WEEK, {row.id: board})
+    got = client.get("/trade/packages", params={"league": row.id, "partner": "Theirs"}).json()
+    assert got["fallback"] is True and [x["grade"] for x in got["league_wide"]] == ["Stretch"]
+    # Computed per team when the board is built, too.
+    for t in r["by_team"]:
+        assert t["packages"] == packages.recommend(t["packages"])[0]
