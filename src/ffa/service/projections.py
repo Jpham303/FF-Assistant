@@ -71,12 +71,39 @@ def load_models(models_dir: str | Path) -> Models:
     )
 
 
-def upcoming_week(con, season: int) -> int | None:
-    """First week of `season` with a game still unplayed."""
-    row = con.sql(
-        f"select min(week) from schedules where season = {int(season)} and home_score is null"
-    ).fetchone()
-    return int(row[0]) if row and row[0] is not None else None
+GAME_OVER_HOURS = 6  # a game kicked off this long ago is over, scored or not
+
+
+def upcoming_week(con, season: int, now: datetime | None = None) -> int | None:
+    """First week of `season` with a game still to finish. A game is finished when it has
+    a score OR kicked off GAME_OVER_HOURS ago: nflverse's schedule fills in scores hours
+    to a day late, and until then the week after Monday night stayed 'upcoming' (Nov 11:
+    week 9 still current Wednesday morning, so week 10 wasn't projected and the week-9
+    projections read as available)."""
+    from datetime import UTC, timedelta
+
+    from ffa.tracking.snapshots import ET
+
+    now = now or datetime.now(UTC)
+    have = {r[0] for r in con.sql("describe schedules").fetchall()}
+    times = "gameday, gametime" if {"gameday", "gametime"} <= have else "null, null"
+    rows = con.sql(
+        f"select week, {times}, home_score from schedules where season = {int(season)}"
+    ).fetchall()
+    cutoff = now - timedelta(hours=GAME_OVER_HOURS)
+    open_weeks = []
+    for week, day, t, score in rows:
+        if score is not None:
+            continue
+        if day and t:
+            try:
+                ko = datetime.fromisoformat(f"{day}T{t}").replace(tzinfo=ET).astimezone(UTC)
+            except ValueError:
+                ko = None
+            if ko is not None and ko <= cutoff:
+                continue  # kicked off long ago: over, the score just isn't in yet
+        open_weeks.append(int(week))
+    return min(open_weeks) if open_weeks else None
 
 
 def latest_sleeper_status(con, season: int, week: int):

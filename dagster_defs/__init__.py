@@ -832,10 +832,10 @@ def pre_kickoff_snapshot(context: SensorEvaluationContext):
     snapshot means that window can never be scored fairly."""
     con = duck.connect(settings.warehouse_dir, datasets=["schedules"])
     season = settings.current_season
-    week = projections_mod.upcoming_week(con, season)
+    now = _now()
+    week = projections_mod.upcoming_week(con, season, now=now)
     if week is None:
         return
-    now = _now()
     for ko in sorted(set(snapshots.kickoffs(con, season, week)["kickoff"].to_list())):
         if ko - PRE_KICKOFF <= now < ko:
             yield RunRequest(run_key=f"prekick-{ko.isoformat()}")

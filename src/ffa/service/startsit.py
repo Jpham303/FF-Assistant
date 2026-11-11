@@ -533,13 +533,23 @@ def player_views(w: Week, rules: ScoringRules) -> dict[str, PlayerView]:
         sm = summary[key]
         row = inputs.get(key, {})
         team = teams.get(meta["team"])
-        rule_pts = (
-            terms.filter(pl.col("key") == key).group_by("term")
-            .agg((pl.col("points").sum() / n).alias("p")).sort("p", descending=True)
-        )  # fmt: skip
         stat_src = g.filter(pl.col("active"))
         if sm["forced_active_batch"] and w.forced is not None:
             stat_src = w.forced.filter(pl.col("forced_key") == key)
+        # Points by rule IF ACTIVE (Nov 11: it showed the injury-discounted total, so its
+        # terms summed to expected_points, not proj_if_active): over the simulations he
+        # plays in, or the forced-active batch when those are few.
+        if sm["forced_active_batch"] and w.forced is not None and stat_src.height:
+            src_terms = breakdown(stat_src.drop("forced_key"), rules, ids=["key", "sim"])
+            n_act = stat_src.height
+        else:
+            act = g.filter(pl.col("active")).select("sim")
+            src_terms = terms.filter(pl.col("key") == key).join(act, on="sim", how="semi")
+            n_act = act.height
+        rule_pts = (
+            src_terms.group_by("term").agg((pl.col("points").sum() / max(n_act, 1)).alias("p"))
+            .sort("p", descending=True)
+        )  # fmt: skip
         rnd = lambda x: None if x is None else round(float(x), 2)  # noqa: E731
         views[key] = PlayerView(
             key=key, name=meta["name"], team=meta["team"], position=pos,

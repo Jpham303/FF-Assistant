@@ -356,3 +356,31 @@ def test_rest_of_season_this_week_matches_the_weekly_projection(client, warehous
     assert this["expected_points"] == pytest.approx(weekly["expected_points"], abs=0.01)
     assert this["play_probability"] == pytest.approx(weekly["play_probability"], abs=0.001)
     assert rest["total"] == pytest.approx(round(weekly["expected_points"] + 11.0, 1), abs=0.06)
+
+
+def test_points_by_rule_are_if_active(client):
+    """Nov 11: points_by_rule summed to the injury-discounted expected points; they're
+    the points if he plays, so they sum to proj_if_active."""
+    r = client.get("/projections", params={"keys": "00-B"}).json()[0]
+    assert r["play_probability"] < 1
+    assert sum(r["points_by_rule"].values()) == pytest.approx(r["proj_if_active"], abs=0.05)
+    assert sum(r["points_by_rule"].values()) > r["expected_points"] + 0.5
+
+
+def test_a_week_is_over_once_its_games_kick_off_long_ago_scored_or_not():
+    """Nov 11: nflverse hadn't filled Monday night's score by Wednesday, so week 9
+    stayed 'upcoming' and week 10 wasn't projected."""
+    from datetime import UTC, datetime
+
+    import duckdb
+
+    from ffa.service.projections import upcoming_week
+
+    con = duckdb.connect()
+    con.sql("""create table schedules as select * from (values
+        (2026, 9, '2026-11-08', '13:00', 24), (2026, 9, '2026-11-09', '20:15', NULL),
+        (2026, 10, '2026-11-15', '13:00', NULL)) t(season, week, gameday, gametime, home_score)""")
+    tue = datetime(2026, 11, 10, 15, 0, tzinfo=UTC)
+    assert upcoming_week(con, 2026, now=tue) == 10  # MNF over, score not in yet
+    mon = datetime(2026, 11, 10, 2, 0, tzinfo=UTC)  # Monday 9 PM ET: MNF in progress
+    assert upcoming_week(con, 2026, now=mon) == 9
