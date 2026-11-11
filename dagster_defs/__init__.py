@@ -602,6 +602,7 @@ def ros_projections(context: AssetExecutionContext) -> MaterializeResult:
         con.sql(f"select * from rosters where season >= {season - 1}").pl(),
         con.sql(f"select * from injuries where season >= {season - 1}").pl(),
         projections_mod.latest_sleeper_status(con, season, week)[0],
+        projections_mod.sleeper_teams(con),
     )  # fmt: skip
     df = ros_mod.project(frames, projections_mod.load_models(settings.models_dir), table,
                          season, week, max(last.values()), scoring,

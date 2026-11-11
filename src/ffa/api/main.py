@@ -159,6 +159,14 @@ class Player(BaseModel):
         "week, reserve-list weeks, this week's designation, the trend, whether the injury "
         "predates the season, and Sleeper's note. Judge severity from this, not the body part",
     )  # fmt: skip
+    traded_from: str | None = Field(
+        None, description="Traded or signed since nflverse's roster: the team he left "
+        "(his team here is Sleeper's)",
+    )  # fmt: skip
+    role_confidence: str | None = Field(
+        None, description="'low' for a traded player with under 2 games on his new team: "
+        "his projected role is half his own history, half a typical player at his position",
+    )  # fmt: skip
     # Deprecated (one release): mean == expected_points; the rest include the zeros
     mean: float = Field(description="Deprecated: use expected_points")
     median: float = Field(description="Deprecated: all simulations, zeros included")

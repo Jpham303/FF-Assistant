@@ -42,6 +42,7 @@ class Frames:
     rosters: pl.DataFrame
     injuries: pl.DataFrame
     statuses: pl.DataFrame | None = None  # Sleeper statuses for week c (live only)
+    teams_now: pl.DataFrame | None = None  # Sleeper's current teams (live only)
 
 
 def as_of(f: Frames, season: int, week: int, *, mask_future_lines: bool) -> Frames:
@@ -65,7 +66,7 @@ def as_of(f: Frames, season: int, week: int, *, mask_future_lines: bool) -> Fram
     upto = (pl.col("season") < season) | (pl.col("week") <= week)
     return Frames(
         tg, f.player_games.filter(before), f.rosters.filter(upto), f.injuries.filter(upto),
-        f.statuses,
+        f.statuses, f.teams_now,
     )  # fmt: skip
 
 
@@ -210,6 +211,7 @@ def project(frames: Frames, models: Models, table: dict[str, float], season: int
             rosters=f.rosters, injuries=f.injuries,
             statuses=f.statuses if current else None, keep_reserve=not current,
             estimate_week=week,  # today's estimates, held flat (not staler each week)
+            teams_now=f.teams_now,  # a traded player's new team every week (Nov 11)
         )  # fmt: skip
         if inp.teams.height == 0:
             continue

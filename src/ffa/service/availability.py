@@ -99,14 +99,22 @@ def _sleeper(con, keys: list[str]) -> dict[str, str]:
 
 
 def _teams_of(con, keys: list[str]) -> dict[str, str]:
-    """Fallback team per player from the ID crosswalk (when roster data is missing)."""
-    try:
-        in_list = ", ".join("'" + k.replace("'", "''") + "'" for k in keys) or "''"
-        return dict(con.sql(
-            f"select gsis_id, team from player_ids where gsis_id in ({in_list})"
-        ).fetchall())  # fmt: skip
-    except Exception:
-        return {}
+    """Each player's current NFL team when the weekly roster doesn't say: Sleeper's (the
+    source of truth for trades, Nov 11), else the ID crosswalk's; a team defense's key
+    names its team (DST_KC: Nov 11, D/STs read 'not on an NFL roster' on a bye)."""
+    out = {k: k.removeprefix("DST_") for k in keys if k.startswith("DST_")}
+    in_list = ", ".join("'" + k.replace("'", "''") + "'" for k in keys) or "''"
+    for sql in (
+        f"select gsis_id, team from player_ids where gsis_id in ({in_list})",
+        f"""select x.gsis_id, s.team from player_ids x
+            join sleeper_players s on s.sleeper_id = x.sleeper_id
+            where x.gsis_id in ({in_list}) and s.team is not null""",
+    ):  # later wins: Sleeper over the crosswalk
+        try:
+            out |= {k: t for k, t in con.sql(sql).fetchall() if t}
+        except Exception:  # noqa: BLE001  (table not there yet)
+            continue
+    return out
 
 
 def reasons(con, season: int, week: int, players: dict[str, str]) -> list[NotPlaying]:
@@ -131,13 +139,15 @@ def reasons(con, season: int, week: int, players: dict[str, str]) -> list[NotPla
             src = "Sleeper player status"
         elif (
             (r is None or r["status"] == "ACT") and playing is not None
-            and (team := (r["team"] if r else team_of.get(k))) and team not in playing
+            and (team := (team_of.get(k) or (r["team"] if r else None)))
+            and team not in playing
         ):  # fmt: skip
+            # Sleeper's team first: a traded player's bye is his new team's (Nov 11).
             reason, detail, src = "bye", f"{team} has no game in week {week}", "schedule"
         elif r and r["status"] in ROSTER_STATUS:
             reason, detail = ROSTER_CODES.get(r["code"] or "", ROSTER_STATUS[r["status"]])
             src = src_roster
-        elif r is None and have_rosters:
+        elif r is None and have_rosters and not team_of.get(k):
             reason, detail, src = ("not_on_nfl_roster", "Not on an NFL roster this week",
                                    "nflverse rosters")  # fmt: skip
         else:

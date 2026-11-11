@@ -136,6 +136,66 @@ def _roster(rosters: pl.DataFrame, season: int, week: int) -> pl.DataFrame:
     )
 
 
+# A player whose current team (Sleeper) differs from nflverse's weekly roster has been
+# traded or signed since (Nov 11: nflverse lags deadline trades, so the old team's
+# opponent, lines, bye and target share were used). Until he has NEW_TEAM_GAMES games
+# with the new team, his share estimates are only half his own: the other half is a
+# typical player at his position (his old role doesn't carry over intact).
+NEW_TEAM_GAMES = 2
+TRADED_SHARE_KEEP = 0.5
+_SHARE_COLS = ("tgt_share", "rz_tgt_share", "car_share", "rz_car_share", "db_share",
+               "rec_td_share", "rush_td_share")  # fmt: skip
+
+
+def current_teams(roster: pl.DataFrame, teams_now: pl.DataFrame | None) -> pl.DataFrame:
+    """roster with Sleeper's team where it names a different NFL team than nflverse
+    (the source of truth for who a player plays for now), and `traded_from` = the team
+    nflverse still lists him on (null when they agree). Sleeper not listing a team (a
+    free agent, or not in its DB) leaves nflverse's."""
+    if teams_now is None or teams_now.height == 0:
+        return roster.with_columns(pl.lit(None, pl.Utf8).alias("traded_from"))
+    now = (teams_now.select("key", pl.col("team").replace(TEAM_ALIASES).alias("_now"))
+           .drop_nulls().unique("key"))  # fmt: skip
+    moved = pl.col("_now").is_not_null() & (pl.col("_now") != pl.col("team"))
+    return (
+        roster.join(now, on="key", how="left")
+        .with_columns(pl.when(moved).then(pl.col("team")).alias("traded_from"),
+                      pl.when(moved).then(pl.col("_now")).otherwise(pl.col("team")).alias("team"))
+        .drop("_now")
+    )  # fmt: skip
+
+
+def _new_team_shares(now: pl.DataFrame, roster: pl.DataFrame, history: pl.DataFrame,
+                     pm, season: int) -> pl.DataFrame:  # fmt: skip
+    """Traded players: games with the new team this season, and their share estimates
+    pulled halfway toward the position's prior until NEW_TEAM_GAMES of them."""
+    moved = roster.filter(pl.col("traded_from").is_not_null()).select("key", "team")
+    if moved.height == 0:
+        return now.with_columns(pl.lit(None, pl.Utf8).alias("traded_from"),
+                                pl.lit(None, pl.Int32).alias("new_team_games"))  # fmt: skip
+    played = (pl.col("played").fill_null(False) if "played" in history.columns
+              else pl.lit(True))  # fmt: skip
+    g = (history.filter((pl.col("season") == season) & played).select("key", "team")
+         .join(moved, on=["key", "team"], how="semi").group_by("key")
+         .agg(pl.len().cast(pl.Int32).alias("new_team_games")))  # fmt: skip
+    info = (roster.select("key", "traded_from").filter(pl.col("traded_from").is_not_null())
+            .join(g, on="key", how="left")
+            .with_columns(pl.col("new_team_games").fill_null(0)))  # fmt: skip
+    now = now.join(info, on="key", how="left")
+    fresh = pl.col("traded_from").is_not_null() & (pl.col("new_team_games") < NEW_TEAM_GAMES)
+    pos = pl.col("position")
+    cols = []
+    for name in _SHARE_COLS:
+        c = f"{name}_s"
+        if c not in now.columns or name not in pm.position_prior:
+            continue
+        prior = pos.replace_strict(pm.position_prior[name], default=None, return_dtype=pl.Float64)
+        blend = TRADED_SHARE_KEEP * pl.col(c) + (1 - TRADED_SHARE_KEEP) * prior
+        cols.append(pl.when(fresh & prior.is_not_null()).then(blend).otherwise(pl.col(c))
+                    .alias(c))  # fmt: skip
+    return now.with_columns(cols) if cols else now
+
+
 def _recently_played(history: pl.DataFrame, roster: pl.DataFrame) -> pl.DataFrame:
     """Keys of inactive/IR players who played for their team in one of its last
     RECENT_TEAM_GAMES games. Older absences are already reflected in teammates' shares."""
@@ -168,15 +228,18 @@ def build(
     statuses: pl.DataFrame | None = None,
     keep_reserve: bool = False,
     estimate_week: int | None = None,
+    teams_now: pl.DataFrame | None = None,
 ) -> WeekInputs:
     """`statuses`: game statuses from a second source (see ffa.ingest.status), combined
     with the nflverse report, the more severe winning. `keep_reserve`: keep every
     inactive / reserve-list player, not only recently active ones (rest-of-season
     projections, where some return later). `estimate_week`: estimate players and matchup
     ratings as of this (earlier) week of the same season instead of `week`, so a future
-    week reuses today's estimates rather than treating the same history as staler."""
+    week reuses today's estimates rather than treating the same history as staler.
+    `teams_now`: key -> current NFL team (Sleeper's player DB), which wins over
+    nflverse's weekly roster when they differ (see current_teams)."""
     teams = _teams(team_games, models, season, week)
-    roster = _roster(rosters, season, week).join(
+    roster = current_teams(_roster(rosters, season, week), teams_now).join(
         teams.select("game_id", "team", "opponent"), on="team", how="inner"
     )
 
@@ -199,6 +262,7 @@ def build(
     now = est.filter((pl.col("season") == season) & (pl.col("week") == ew)).join(
         to_predict.select("key"), on="key", how="semi"
     )
+    now = _new_team_shares(now, roster, history, pm, season)
 
     # Opposing defense's matchup ratings going into this week.
     dg = defense_games(expectations(est_hist))
@@ -269,7 +333,7 @@ def build(
     keep = [
         "key", "name", "team", "opponent", "game_id", "position", "roster_status",
         "injury_status", "designation", "injury_since", "note", "listing",
-        "injury_context", "returning",
+        "injury_context", "returning", "traded_from", "new_team_games",
         "practice", "injury", "injury_source", "injury_updated_at", "injury_fetched_at",
         "prev_out", "prev_status", "prev_week", "final_report", "report_published",
         "season_snap_pct", "m_tgt", "m_catch", "m_ypr", "m_ypc",

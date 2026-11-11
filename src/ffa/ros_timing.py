@@ -56,6 +56,7 @@ def main() -> None:
         con.sql(f"select * from rosters where season >= {season - 1}").pl(),
         con.sql(f"select * from injuries where season >= {season - 1}").pl(),
         projections.latest_sleeper_status(con, season, week)[0],
+        projections.sleeper_teams(con),
     )  # fmt: skip
     models = projections.load_models(settings.models_dir)
     print(f"Loading data: {time.monotonic() - t0:.0f} s ({len(scoring)} scoring setups)")

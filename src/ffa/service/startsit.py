@@ -106,6 +106,10 @@ class PlayerView:
     # This season's injury story: reports by week, practice, reserve list, trend (see
     # ffa.model.injury_context). None for a player with nothing to report.
     injury_context: str | None = None
+    # Traded or signed since nflverse's roster (Sleeper's team used): the team he left,
+    # and games with the new one. Role is low confidence until 2 such games (Nov 11).
+    traded_from: str | None = None
+    role_confidence: str | None = None
     # upcoming / in_progress / final (kickoff + 4 h); None when the kickoff is unknown.
     # actual_points: what Sleeper has awarded so far (set by the API for league players).
     game_status: str | None = None
@@ -402,11 +406,35 @@ def _usage_lines(row: dict, position: str, usage: dict | None) -> list[str]:
     return out
 
 
+def traded_confidence(row: dict) -> str | None:
+    """'low' for a player traded within his last 2 games, 'normal' after, else None."""
+    if not row.get("traded_from"):
+        return None
+    return "low" if (row.get("new_team_games") or 0) < 2 else "normal"
+
+
+def traded_line(row: dict) -> str | None:
+    if not row.get("traded_from"):
+        return None
+    n = int(row.get("new_team_games") or 0)
+    games = f"{n} game{'s' if n != 1 else ''}" if n else "no games yet"
+    tail = (
+        ": role is LOW CONFIDENCE (share estimates are half his own, half a typical "
+        f"{row.get('position', '')} until 2 games with the new team)"
+        if n < 2
+        else ""
+    )
+    return (f"Traded: now on {row['team']} (Sleeper), from {row['traded_from']}; {games} "
+            f"with the new team{tail}")  # fmt: skip
+
+
 def drivers(row: dict, team: dict | None, position: str,
             usage: dict | None = None) -> list[str]:  # fmt: skip
     """Plain-language reasons, each with the number it rests on. `usage` holds what the
     simulation actually gave the player and his team (see `_usage_lines`)."""
     out = []
+    if (t := traded_line(row)) is not None:
+        out.append(t)
     game_keys = ("spread_for", "opponent", "total_line", "implied", "mu_plays", "p_pass")
     if team and all(team.get(k) is not None for k in game_keys):
         # spread_for is the team's expected margin (positive = favored). Written out in
@@ -542,6 +570,8 @@ def player_views(w: Week, rules: ScoringRules) -> dict[str, PlayerView]:
                 w.kickoffs.get(meta["team"])),
             game_status=gamestate.status(w.kickoffs.get(meta["team"])),
             injury_context=row.get("injury_context"),
+            traded_from=row.get("traded_from"),
+            role_confidence=traded_confidence(row),
             mean=float(sm["expected_points"]), median=float(f.median()),
             p10=float(f.quantile(0.1)), p90=float(f.quantile(0.9)),
         )  # fmt: skip

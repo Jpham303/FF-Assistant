@@ -150,6 +150,10 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    Stretch and Long shot. Present trades in exactly the order a tool returns them. Never
    re-sort or headline them by title odds, points a week or confidence ("top deals by
    title gain" is wrong). Title-odds gain only orders trades within the same grade.
+21. Traded players: a player's team is Sleeper's (nflverse's rosters lag trades). When a
+   tool shows traded_from or a "Traded:" driver, say he was traded and from where, and
+   when role_confidence is "low" say his projected role is low confidence (no or one
+   game with the new team): weigh that in start/sit and trade advice.
 """
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)

@@ -96,6 +96,25 @@ def latest_sleeper_status(con, season: int, week: int):
     return None, None
 
 
+def sleeper_teams(con) -> pl.DataFrame | None:
+    """key (gsis_id) -> current NFL team from the latest Sleeper player DB (fetched
+    daily; Sleeper updates trades and signings within hours, nflverse's weekly rosters
+    lag them). None when the DB or the crosswalk isn't there yet."""
+    from ffa.ingest.ids import normalize_team
+
+    try:
+        df = con.sql(
+            """select coalesce(x.gsis_id, s.gsis_id) as key, s.team
+               from sleeper_players s left join player_ids x on x.sleeper_id = s.sleeper_id
+               where s.team is not null"""
+        ).pl()
+    except Exception:  # noqa: BLE001  (no Sleeper fetch yet: nflverse alone)
+        return None
+    return (df.filter(pl.col("key").is_not_null())
+            .with_columns(pl.col("team").map_elements(normalize_team, return_dtype=pl.Utf8))
+            .drop_nulls().unique("key"))  # fmt: skip
+
+
 def _sleeper_status(con, season: int, week: int) -> pl.DataFrame | None:
     return latest_sleeper_status(con, season, week)[0]
 
@@ -154,6 +173,7 @@ def run_week(con, warehouse_dir: str | Path, models: Models, season: int, week: 
         rosters=con.sql(f"select * from rosters where season = {int(season)}").pl(),
         injuries=con.sql(f"select * from injuries where season = {int(season)}").pl(),
         statuses=_sleeper_status(con, season, week),
+        teams_now=sleeper_teams(con),
     )  # fmt: skip
     check_inputs(inp.players)
     missing = inp.teams.filter(pl.col("implied").is_null() | pl.col("total_line").is_null())
