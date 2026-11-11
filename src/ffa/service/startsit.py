@@ -521,7 +521,6 @@ def player_views(w: Week, rules: ScoringRules) -> dict[str, PlayerView]:
     summary = {r["key"]: r for r in ifactive.summarize(pts, play, forced_pts)
                .iter_rows(named=True)}  # fmt: skip
     terms = breakdown(w.sims, rules, ids=["key", "sim"])
-    n = int(w.sims["sim"].max()) + 1
     teams = {r["team"]: r for r in w.teams.iter_rows(named=True)}
     usage = {r["team"]: r for r in w.usage.iter_rows(named=True)} if w.usage is not None else {}
     absent = w.absent if w.absent is not None else None
