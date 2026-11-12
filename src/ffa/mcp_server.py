@@ -154,6 +154,12 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    tool shows traded_from or a "Traded:" driver, say he was traded and from where, and
    when role_confidence is "low" say his projected role is low confidence (no or one
    game with the new team): weigh that in start/sit and trade advice.
+22. Starting lineups ("set my lineup", "who should I start", my_team): always show the
+   bench too, never only the starters. After the lineup table, a bench table with
+   every bench player: name, position, opponent, proj_if_active, play_probability,
+   expected_points and injury status, best first by expected_points. Then not_playing
+   (bye, out, IR) with its reason. Flag any bench player whose expected_points beats a
+   starter he could replace (same or flex-eligible slot).
 """
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
