@@ -229,3 +229,26 @@ Bugs found and fixed during the backtest and the first live run:
   could inform it.
 - One 2024 sample showed running-back starters about 1 point low; full-season volume
   buckets did not confirm it. Recheck in the full backtest.
+
+### Teammate attrition in future weeks (Nov 2026)
+
+In future weeks every teammate's chance to play drifts toward ~80%, and the simulation
+hands an absent player's work to whoever plays, so a player's points if active rise
+week by week (+9% 1-2 weeks out, +14% at 6+). The proposed alternative redistributed
+work only for players injured today and scaled each healthy player's own expected points
+by his attrition. Rule, fixed before running: ship only if (1) all-player
+rest-of-season MAE is no worse (95% CI upper <= +0.3), (2) future-week points-if-active
+bias in games played is no larger, (3) no fantasy-relevant position is worse with a CI
+excluding zero. 2025 holdout, cutoffs 4/8/12, models fit through 2024:
+
+| | Current | Proposed |
+| --- | --- | --- |
+| Future proj_if_active / cutoff week (1-2, 3-5, 6+ weeks out) | 1.09, 1.10, 1.14 | 0.95, 0.93, 0.93 |
+| Future weeks, games played: bias (actual - if active) | -0.46 | +0.89 |
+| Rest-of-season MAE, all players (n=1,802) | 18.05 | 17.74 (-0.31 [-0.73, +0.10]) |
+| Rest-of-season bias, all players | +0.09 | +6.40 |
+| Fantasy-relevant RB MAE (n=108) | 33.1 | 36.4 (+3.27 [+0.28, +6.13]) |
+| Fantasy-relevant bias, all positions | -2.4 | +11.0 |
+
+Criteria 2 and 3 fail: the proposal under-projects (a team's absent players' work has to
+go somewhere), so the current behavior stays. The rising points-if-active is real.

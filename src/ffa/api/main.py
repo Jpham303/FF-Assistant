@@ -574,7 +574,11 @@ def rest_of_season(
         "team ratings fitted on this season's betting lines; chance to play from where each "
         "player stands today (healthy, injured, IR) and how often players in that spot "
         "played later games. Backtested on 2025: beat season-average and last-4 pace at "
-        "every position.",
+        "every position. proj_if_active rises a little in later weeks (about 9% 1-2 weeks "
+        "out, 14% 6+): teammates will miss some of those games and their work goes to "
+        "whoever plays. That's real, not a gap between this week and the rest: the 2025 "
+        "backtest kept it (rest-of-season totals within 0.1 point on average; removing "
+        "it under-projected by 6).",
         "players": [rest[k] for k in ks if k in rest],
         "not_found": [k for k in ks if k not in rest],
     }  # fmt: skip
