@@ -189,7 +189,8 @@ def _summaries(lines: pl.DataFrame, leagues: dict[str, dict], week: int) -> pl.D
 def project(frames: Frames, models: Models, table: dict[str, float], season: int, week: int,
             last_week: int, leagues: dict[str, dict], *, n: int = N_FUTURE,
             mask_future_lines: bool = False, seed: int = 0,
-            progress: Callable[[str], None] | None = None) -> pl.DataFrame:  # fmt: skip
+            progress: Callable[[str], None] | None = None,
+            attrition_redistributes: bool = True) -> pl.DataFrame:  # fmt: skip
     """Rest-of-season rows: league, key, name, position, team, target_week, opponent,
     play_probability, expected_points, proj_if_active, sd, p10/p90_if_active,
     lines_from_ratings. `progress`: called with one line per projected week (time,
@@ -238,10 +239,34 @@ def project(frames: Frames, models: Models, table: dict[str, float], season: int
                 # keeps this week's chance to play.
                 pl.when(pl.col("position") == "K").then(pl.col("p_play"))
                 .otherwise(pl.col("_horizon")).alias("p_play")
-            ).drop("cat", "role", "k", "_horizon")  # fmt: skip
+            ).drop("role", "k", "_horizon")  # fmt: skip
+            own = players.select("key", pl.col("p_play").alias("_own"))
+            if not attrition_redistributes:
+                players = players.with_columns(
+                    pl.when(pl.col("cat").fill_null("healthy") == "healthy")
+                    .then(pl.lit(1.0))
+                    .otherwise(pl.col("p_play"))
+                    .alias("p_play")
+                )
+            players = players.drop("cat")
             inp.players = players
         lines = simulate(inp, models.sim, n=n, seed=seed + season * 100 + w)
         s = _summaries(lines, leagues, w)
+        if not current and not attrition_redistributes:
+            # Simulated at 1.0 (healthy): his own chance to play scales his own points.
+            s = s.join(own, on="key", how="left").join(
+                players.select("key", pl.col("p_play").alias("_sim")), on="key", how="left"
+            )
+            scale = (pl.col("_sim") >= 1.0) & pl.col("_own").is_not_null() & (pl.col("_own") < 1.0)
+            mu, sd, q = pl.col("proj_if_active"), pl.col("sd"), pl.col("_own")
+            s = s.with_columns(
+                pl.when(scale).then(q * mu).otherwise(pl.col("expected_points"))
+                .alias("expected_points"),
+                pl.when(scale).then((q * (sd ** 2 + mu ** 2) - (q * mu) ** 2).sqrt())
+                .otherwise(sd).alias("sd"),
+            ).drop("_own", "_sim")  # fmt: skip
+            players = players.drop("p_play").join(own.rename({"_own": "p_play"}), on="key",
+                                                  how="left")  # fmt: skip
         meta = players.select("key", "name", "position", "team", "opponent",
                               pl.col("p_play").alias("play_probability"))  # fmt: skip
         dst = lines.filter(pl.col("key").str.starts_with("DST_")).select(
