@@ -306,6 +306,7 @@ def build(
                       pl.col("final_report").fill_null(False),
                       pl.col("report_published").fill_null(False))
     )  # fmt: skip
+    players = _last_weeks_sleeper_status(players)
     p_play = [
         models.sim.play_probability(
             r["injury_status"],
@@ -336,7 +337,7 @@ def build(
         "injury_context", "returning", "traded_from", "new_team_games",
         "practice", "injury", "injury_source", "injury_updated_at", "injury_fetched_at",
         "prev_out", "prev_status", "prev_week", "final_report", "report_published",
-        "season_snap_pct", "m_tgt", "m_catch", "m_ypr", "m_ypc",
+        "status_carried", "season_snap_pct", "m_tgt", "m_catch", "m_ypr", "m_ypc",
         *[f"{n}_s" for n in ("tgt_share", "rz_tgt_share", "car_share", "rz_car_share",
                              "db_share", "rec_td_share", "rush_td_share", "catch_rate",
                              "ypr", "ypc", "adot", "int_rate", "scramble_rate", "fum_rate")],
@@ -388,6 +389,38 @@ def _statuses(injuries: pl.DataFrame, statuses: pl.DataFrame | None, season: int
         "status": "injury_status", "source": "injury_source",
         "updated_at": "injury_updated_at", "fetched_at": "injury_fetched_at",
     }).join(prev, on="key", how="full", coalesce=True)  # fmt: skip
+
+
+GAME_DESIGNATIONS = ("Out", "Doubtful", "Questionable")
+
+
+def _last_weeks_sleeper_status(players: pl.DataFrame) -> pl.DataFrame:
+    """Sleeper keeps a player's last game designation until it posts a new one, so early
+    in the week its 'Out' is last week's (Nov 17: a Monday 'Out' read as 0% for the next
+    game). Until the team's first official report of this week, a Sleeper game
+    designation counts as last week's: it becomes prev_status (unless the official
+    report already gave one), and this week has no designation yet, so the chance to
+    play is how often players in that spot played their next game. Reserve listings
+    (IR, PUP, suspended) aren't weekly: they stand."""
+    stale = (
+        (pl.col("injury_source") == "Sleeper")
+        & pl.col("injury_status").is_in(GAME_DESIGNATIONS)
+        & ~pl.col("report_published")
+    )  # fmt: skip
+    if "injury_source" not in players.columns:
+        return players.with_columns(pl.lit(False).alias("status_carried"))
+    return players.with_columns(
+        stale.fill_null(False).alias("status_carried"),
+        pl.when(stale).then(pl.coalesce("prev_status", "injury_status"))
+        .otherwise(pl.col("prev_status")).alias("prev_status"),
+        pl.when(stale).then(pl.coalesce("prev_status", "injury_status") == "Out")
+        .otherwise(pl.col("prev_out")).fill_null(False).alias("prev_out"),
+    ).with_columns(
+        pl.when(pl.col("status_carried")).then(None).otherwise(pl.col("injury_status"))
+        .alias("injury_status"),
+        pl.when(pl.col("status_carried")).then(None).otherwise(pl.col("designation"))
+        .alias("designation"),
+    )  # fmt: skip
 
 
 def _previous_status(injuries: pl.DataFrame, season: int, week: int) -> pl.DataFrame:

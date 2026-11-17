@@ -76,7 +76,8 @@ def test_low_play_chance_uses_a_forced_active_batch_and_is_stable():
     p50 = []
     for seed in (11, 12):
         forced = forced_active(inp, models, n=1000, seed=seed)
-        assert set(forced["forced_key"].unique()) == {"A_RB1"}
+        out = set(inp.players.filter(pl.col("p_play") <= 0)["key"].to_list())
+        assert set(forced["forced_key"].unique()) == {"A_RB1"} | out
         s, _ = _summary(inp, n=2000, seed=seed, forced=forced)
         r = s["A_RB1"]
         assert r["forced_active_batch"] and r["active_sims"] >= ifactive.MIN_ACTIVE
@@ -134,3 +135,16 @@ def test_deprecated_mean_equals_expected_points():
     assert v["R"].mean == v["R"].expected_points
     assert v["R"].proj_if_active == pytest.approx(15.0)
     assert v["R"].expected_points == pytest.approx(0.4 * 15.0)
+
+
+def test_a_ruled_out_player_still_has_an_if_active_projection():
+    """Nov 17: an Out player showed proj_if_active null, so you couldn't see what you'd
+    be benching. Expected points stay 0."""
+    inp = _week(A_RB1=0.0)
+    models = SimpleNamespace(sim=params())
+    forced = forced_active(inp, models, n=1000, seed=3)
+    assert "A_RB1" in set(forced["forced_key"].to_list())
+    s, _ = _summary(inp, n=2000, seed=3, forced=forced)
+    r = s["A_RB1"]
+    assert r["play_probability"] == 0 and r["expected_points"] == 0
+    assert r["proj_if_active"] and r["proj_if_active"] > 1 and r["forced_active_batch"]

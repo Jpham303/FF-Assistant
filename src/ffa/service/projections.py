@@ -147,13 +147,14 @@ def _sleeper_status(con, season: int, week: int) -> pl.DataFrame | None:
 
 
 def forced_active(inp, models: Models, n: int, seed: int) -> pl.DataFrame:
-    """For each player with a real but low chance to play (fewer than MIN_ACTIVE active
-    simulations expected in the main batch), simulate his game again with him forced
-    active, teammates as usual. Returns his own stat lines only, with `forced_key`."""
+    """For each player with a low chance to play, ruled-out players included (fewer than
+    MIN_ACTIVE active simulations expected in the main batch), simulate his game again
+    with him forced active, teammates as usual: his if-active projection (Nov 17: an Out
+    player showed none, so you couldn't see what you'd be benching). Returns his own stat
+    lines only, with `forced_key`."""
     expected_active = inp.players["p_play"].fill_null(0) * N_SIMS
     low = inp.players.filter(
-        (pl.col("p_play") > 0) & (expected_active < ifactive.MIN_ACTIVE)
-        & ~pl.col("position").is_in(["K"])
+        (expected_active < ifactive.MIN_ACTIVE) & ~pl.col("position").is_in(["K"])
     )  # fmt: skip
     out = []
     for i, r in enumerate(low.select("key", "game_id").iter_rows(named=True)):

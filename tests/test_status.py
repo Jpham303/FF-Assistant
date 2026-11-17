@@ -460,3 +460,31 @@ def test_a_missed_practice_without_a_status_is_still_said():
                                  "final_report": False, "injury_source": "nflverse"})  # fmt: skip
     assert line and "Counted as healthy until a designation" in line
     assert startsit.injury_line({"p_play": 1.0, "practice": DNP, "final_report": True}) is None
+
+
+def test_sleepers_leftover_out_counts_as_last_week_until_this_weeks_report():
+    """Nov 17: Sleeper's Monday 'Out' (last week's) read as 0% for this week's game."""
+    from ffa.model.inputs import _last_weeks_sleeper_status
+
+    df = pl.DataFrame({
+        "key": ["early", "reported", "ir", "nfl"],
+        "injury_status": ["Out", "Out", "IR", "Out"],
+        "designation": ["Out", "Out", "IR", "Out"],
+        "injury_source": ["Sleeper", "Sleeper", "Sleeper", "nflverse"],
+        "report_published": [False, True, False, False],
+        "prev_status": [None, None, None, None], "prev_out": [False] * 4,
+    })  # fmt: skip
+    got = {r["key"]: r for r in _last_weeks_sleeper_status(df).iter_rows(named=True)}
+    e = got["early"]
+    assert e["injury_status"] is None and e["prev_status"] == "Out" and e["prev_out"]
+    assert e["status_carried"]
+    assert got["reported"]["injury_status"] == "Out"  # this week's report is out: it counts
+    assert got["ir"]["injury_status"] == "IR"  # reserve listings aren't weekly
+    assert got["nfl"]["injury_status"] == "Out"
+    # So the chance to play is the history of players Out last week, not 0.
+    p = SIM.play_probability(None, None, True, prev_out=True, final=False,
+                             prev_status="Out", published=False)  # fmt: skip
+    assert 0 < p < 1
+    line = startsit.injury_line({"p_play": p, "report_published": False, "prev_status": "Out",
+                                 "status_carried": True})  # fmt: skip
+    assert "Sleeper's last status, not yet updated for this week" in line

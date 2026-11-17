@@ -246,6 +246,10 @@ class NotPlayingOut(BaseModel):
     source: str
     may_return: bool = Field(description="Could play later this season (bye: next week)")
     fantasy_slot: str | None = Field(None, description="'IR' if in your league's IR slot")
+    proj_if_active: float | None = Field(
+        None, description="Ruled out with a game this week: what he'd score if he played "
+        "(what you'd be benching); expected points are 0",
+    )  # fmt: skip
 
 
 class MyTeam(BaseModel):
@@ -672,7 +676,8 @@ def my_team(league: str, week: int | None = None, con=Depends(get_con),
             prefixes = ("Injury", "On injured", "Inactive")
             line = next((d for d in v.drivers if d.startswith(prefixes)), "Ruled out")
             out.append(availability.NotPlaying(
-                v.key, v.name, "out", line, v.injury_source or "nflverse", True))  # fmt: skip
+                v.key, v.name, "out", line, v.injury_source or "nflverse", True,
+                proj_if_active=v.proj_if_active))  # fmt: skip
     ir_slot = {e.player_key: e.name or e.platform_player_id for e in entries
                if e.slot_type == "ir" and e.player_key}  # fmt: skip
     for r in availability.reasons(con, season, w, ir_slot):

@@ -6,8 +6,10 @@
 - play_probability: the model's chance he plays (the share of simulations he is active
   in, up to sampling noise).
 - expected_points = play_probability x proj_if_active: what the lineup is ranked by.
-- Not playing (play_probability 0: Out, IR, PUP, suspended, bye): if-active fields are
-  null and expected points are 0.
+- Ruled out (play_probability 0 with a game this week: Out, inactive): expected points
+  are 0, and the if-active projection is still computed from a forced-active batch, so
+  you can see what you'd be benching (Nov 17). No game (bye, players not in the week's
+  inputs): no simulations, so the if-active fields are null.
 """
 
 from __future__ import annotations
@@ -53,11 +55,7 @@ def summarize(points: pl.DataFrame, play: dict[str, float],
         pl.col("key").is_in(list(forced_keys)).alias("forced_active_batch"),
         pl.col("active_sims").fill_null(0),
     )  # fmt: skip
-    if_cols = ["proj_if_active", *[f"{n}_if_active" for n in RANGE], "quantiles_if_active"]
-    not_playing = pl.col("play_probability") <= 0
     return out.with_columns(
-        *[pl.when(not_playing).then(None).otherwise(pl.col(c)).alias(c) for c in if_cols],
-    ).with_columns(
         (pl.col("play_probability") * pl.col("proj_if_active").fill_null(0.0)).alias(
             "expected_points"
         ),

@@ -52,6 +52,8 @@ class NotPlaying:
     source: str
     may_return: bool  # later this season (bye: next week)
     fantasy_slot: str | None = None  # e.g. "IR" if he sits in your league's IR slot
+    # Ruled out with a game this week: what he'd score if he played (Nov 17).
+    proj_if_active: float | None = None
 
     def as_dict(self) -> dict:
         return asdict(self)
