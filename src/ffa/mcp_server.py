@@ -159,8 +159,8 @@ baselines on start/sit accuracy). Rules for answering with these tools:
    every bench player: name, position, opponent, proj_if_active, play_probability,
    expected_points and injury status, best first by expected_points. Then not_playing
    (bye, out, IR) with its reason, and for a ruled-out player his proj_if_active (what
-   he'd score if he played: what the user is benching). Flag any bench player whose expected_points beats a
-   starter he could replace (same or flex-eligible slot).
+   he'd score if he played: what the user is benching). Flag any bench player whose
+   expected_points beats a starter he could replace (same or flex-eligible slot).
 23. Rest of season: proj_if_active creeping up in later weeks is expected (teammates'
    future absences hand him work; backtested). Don't call it a bug or a seam; rank and
    compare by expected_points and totals.
