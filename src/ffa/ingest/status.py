@@ -38,6 +38,16 @@ def practice(value: str | None) -> str | None:
     return None
 
 
+def _sleeper_practice(r: dict) -> str | None:
+    """Sleeper's practice participation, else its practice description. Both are mostly
+    empty (Oct 24: 1 of 12,229 players had a participation), so this is a bonus, not a
+    source to rely on; text it can't read gives None."""
+    got = practice(r.get("practice_participation"))
+    if got is None:
+        got = practice(r.get("practice_description"))
+    return got
+
+
 def sleeper_status(players: pl.DataFrame, crosswalk: pl.DataFrame,
                    fetched_at: datetime) -> pl.DataFrame:  # fmt: skip
     """One row per player Sleeper lists with a designation or practice note, keyed by
@@ -45,7 +55,7 @@ def sleeper_status(players: pl.DataFrame, crosswalk: pl.DataFrame,
     fetched_at."""
     has = [
         c
-        for c in ("injury_status", "practice_participation", "injury_notes")
+        for c in ("injury_status", "practice_participation", "practice_description", "injury_notes")
         if c in players.columns
     ]
     p = players.filter(pl.any_horizontal(pl.col(c).is_not_null() for c in has))
@@ -65,7 +75,7 @@ def sleeper_status(players: pl.DataFrame, crosswalk: pl.DataFrame,
                 upd = None
         rows.append({
             "key": r["key"], "status": STATUS.get(r["injury_status"] or ""),
-            "practice": practice(r["practice_participation"]), "injury": r["injury_body_part"],
+            "practice": _sleeper_practice(r), "injury": r["injury_body_part"],
             "source": SOURCE, "updated_at": upd, "fetched_at": fetched_at.astimezone(UTC),
             "designation": r["injury_status"],  # as Sleeper says it: IR, PUP, Out...
             "injury_since": (r.get("injury_start_date") or None),

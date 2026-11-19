@@ -34,6 +34,12 @@ PENDING_PRACTICE = frozenset({
 })  # fmt: skip
 
 
+# Fitted for every practice level, so a carried status can be raised by this week's
+# practice (Nov 19: Tate, Out in week 10, limited Wednesday, still read the Out rate).
+PRACTICE_FIT = frozenset(PENDING_PRACTICE | {"Full Participation in Practice"})
+# Only these can raise a carried status: a missed practice never lowers one (Oct 29).
+RAISING_PRACTICE = ("Limited Participation in Practice", "Full Participation in Practice")
+
 CARRY_STATUSES = ("Out", "Doubtful", "Questionable")
 # Used only if a fitted parameter file predates the carry-forward table: conservative
 # values, replaced by fitted ones at the next sim_params run.
@@ -112,6 +118,8 @@ class SimParams:
           "pending" rates were fitted on the weekly report's last practice (Friday) and
           applied to Wednesday's: St. Brown and Gibbs, a Wednesday DNP each with no
           status, read 20% to play (Oct 29).
+        - A carried status can be raised (never lowered) by this week's limited or full
+          practice: Tate, Out in week 10 and limited Wednesday, read the Out rate (Nov 19).
         - On a final report, no designation means cleared to play.
         """
         r = "role" if role else "depth"
@@ -123,15 +131,33 @@ class SimParams:
             listed = practice is not None
             unconfirmed = not published or (not final and listed)
             if prev_status in CARRY_STATUSES and unconfirmed:
-                for key in (f"carry|{prev_status}|{r}", f"carry|{prev_status}|any"):
-                    if key in self.p_play:
-                        return self.p_play[key]
-                return CARRY_FALLBACK[prev_status]
+                return self._carried(prev_status, practice, r)
             return 1.0  # no designation: healthy, whatever practice said
         for key in (f"{status}|{practice}|{r}", f"{status}|any|{r}", f"{status}|any|any"):
             if key in self.p_play:
                 return self.p_play[key]
         return 0.5
+
+    def _carried(self, prev_status: str, practice: str | None, r: str) -> float:
+        """Last week's designation, carried until this week's arrives. A limited or full
+        practice this week can raise it: how often players with that practice after that
+        status played. It never lowers it (a Wednesday DNP is weak evidence, Oct 29)."""
+        carry = None
+        for key in (f"carry|{prev_status}|{r}", f"carry|{prev_status}|any"):
+            if key in self.p_play:
+                carry = self.p_play[key]
+                break
+        if carry is None:
+            carry = CARRY_FALLBACK[prev_status]
+        if practice not in RAISING_PRACTICE:
+            return carry
+        prev = "prev_out" if prev_status == "Out" else "prev_ok"
+        key = f"pending|{practice}|{r}|{prev}"
+        if key not in self.p_play:
+            return carry  # parameter file fitted before this cell existed
+        if self.p_play[key] > carry:
+            return self.p_play[key]
+        return carry
 
 
 QB_QUANTILES = 41  # 0, 2.5%, ..., 100%
@@ -219,7 +245,8 @@ def _availability(injuries: pl.DataFrame, snaps: pl.DataFrame, player_games: pl.
     inj = inj.join(played, on=["key", "season", "week"], how="left").with_columns(
         pl.col("played").fill_null(False)
     )
-    # "Pending": what a missed or limited practice says before a game status exists.
+    # "Pending": what a practice level says before a game status exists (used only to
+    # raise a carried status; see _carried).
     # Fitted on every report row with that practice level, whatever status followed, and
     # split by whether the player was Out the week before.
     out_weeks = (
@@ -230,7 +257,7 @@ def _availability(injuries: pl.DataFrame, snaps: pl.DataFrame, player_games: pl.
     )
     pend = (
         injuries.filter(
-            pl.col("practice_status").is_in(list(PENDING_PRACTICE))
+            pl.col("practice_status").is_in(list(PRACTICE_FIT))
             & ~pl.col("practice_primary_injury")
             .fill_null("")
             .str.to_lowercase()

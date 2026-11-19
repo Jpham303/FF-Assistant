@@ -304,8 +304,38 @@ def test_last_weeks_status_carries_until_the_new_report():
 def test_carried_status_is_explained():
     line = startsit.injury_line({"p_play": 0.31, "report_published": False,
                                  "prev_status": "Out", "prev_week": 6})  # fmt: skip
-    assert line.startswith("No injury report yet this week; was Out in week 6 [nflverse")
-    assert "plays in 31% of simulations" in line
+    assert line.startswith("Was Out in week 6; this week's practice reports aren't in the "
+                           "data yet")  # fmt: skip
+    assert "[nflverse" in line and "plays in 31% of simulations" in line
+    # Nov 19: once the practice is in, the line says so (and why the number moved).
+    line = startsit.injury_line({"p_play": 0.40, "report_published": True, "final_report": False,
+                                 "prev_status": "Out", "prev_week": 10, "practice": LIMITED,
+                                 "injury_source": "nflverse"})  # fmt: skip
+    assert line.startswith("Was Out in week 10; limited in practice this week, no game status")
+    assert "plays in 40% of simulations" in line
+
+
+def test_this_weeks_practice_raises_a_carried_status_never_lowers_it():
+    """Nov 19: Tate, Out in week 10, limited Wednesday: still read the Out carry rate."""
+    full = "Full Participation in Practice"
+    sim = SimParams(p_play={
+        "carry|Out|role": 0.31, "carry|Questionable|role": 0.80,
+        f"pending|{LIMITED}|role|prev_out": 0.40, f"pending|{full}|role|prev_out": 0.87,
+        f"pending|{DNP}|role|prev_out": 0.01, f"pending|{LIMITED}|role|prev_ok": 0.76,
+    })  # fmt: skip
+
+    # Team report out (Wednesday), not final, listed with a practice: unconfirmed.
+    def p(prac, prev="Out"):
+        return sim.play_probability(None, prac, True, final=False, prev_status=prev)
+
+    assert p(LIMITED) == 0.40
+    assert p(full) == 0.87
+    assert p(DNP) == 0.31  # a missed practice never lowers it
+    assert p(LIMITED, "Questionable") == 0.80  # lower practice rate: carry stands
+    # no cell for full practice after Questionable (old file): carry stands
+    assert p(full, "Questionable") == 0.80
+    # the final report decides: no designation on it = cleared
+    assert sim.play_probability(None, LIMITED, True, final=True, prev_status="Out") == 1.0
 
 
 def test_projection_run_fetches_sleeper_when_missing(tmp_path, monkeypatch):
@@ -488,3 +518,20 @@ def test_sleepers_leftover_out_counts_as_last_week_until_this_weeks_report():
     line = startsit.injury_line({"p_play": p, "report_published": False, "prev_status": "Out",
                                  "status_carried": True})  # fmt: skip
     assert "Sleeper's last status, not yet updated for this week" in line
+
+
+def test_sleeper_practice_description_is_a_fallback():
+    from datetime import UTC, datetime
+
+    from ffa.ingest import status as st
+
+    players = pl.DataFrame({
+        "sleeper_id": ["1", "2"], "gsis_id": ["00-A", "00-B"],
+        "injury_status": [None, None], "injury_body_part": [None, None],
+        "practice_participation": [None, None],
+        "practice_description": ["Limited", "something unreadable"], "news_updated": [None, None],
+    })  # fmt: skip
+    xw = pl.DataFrame({"sleeper_id": ["1", "2"], "gsis_id": ["00-A", "00-B"]})
+    got = st.sleeper_status(players, xw, datetime(2026, 11, 19, tzinfo=UTC))
+    by = {r["key"]: r["practice"] for r in got.iter_rows(named=True)}
+    assert by == {"00-A": LIMITED, "00-B": None}

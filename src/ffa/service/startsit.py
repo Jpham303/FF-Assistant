@@ -331,11 +331,28 @@ def injury_line(row: dict) -> str | None:
         wk = f" in week {row['prev_week']}" if row.get("prev_week") else " last week"
         src = ("Sleeper's last status, not yet updated for this week"
                if row.get("status_carried") else "nflverse")  # fmt: skip
-        return (f"No injury report yet this week; was {row['prev_status']}{wk} "
-                f"[{src}, fetched {when(row.get('injury_fetched_at')) or 'time unknown'}]; "
+        fetched = when(row.get("injury_fetched_at")) or "time unknown"
+        # Nov 19: "No injury report yet" read as if the team hadn't reported, when the
+        # report was out and only missing from the data (nflverse lags; Sleeper's player
+        # DB carries almost no practice participation).
+        if practice:
+            seen = f"{PRACTICE_SHORT.get(practice, practice)} this week, no game status yet"
+        else:
+            seen = (
+                "this week's practice reports aren't in the data yet (the team may "
+                "already have reported: the official feed lags a day or more)"
+            )
+        return (f"Was {row['prev_status']}{wk}; {seen} [{src}, fetched {fetched}]; "
                 f"plays in {p * 100:.0f}% of simulations (players in that spot played their "
-                "next game at this rate historically; updates with the team's first report, "
-                "usually Wednesday)")  # fmt: skip
+                "next game at this rate historically). If he has practiced this week, "
+                "this may be low until the report reaches the data")  # fmt: skip
+    if p < 1.0 and practice and row.get("prev_status"):
+        wk = f" in week {row['prev_week']}" if row.get("prev_week") else " last week"
+        return (f"Was {row['prev_status']}{wk}; {PRACTICE_SHORT.get(practice, practice)} "
+                f"this week, no game status yet{injury} [{provenance(row)}]; plays in "
+                f"{p * 100:.0f}% of simulations (how often players with that practice after "
+                f"{row['prev_status']} played). Statuses usually come with Friday's final "
+                "report")  # fmt: skip
     if p < 1.0 and practice:
         return (f"No game status yet, but {PRACTICE_SHORT.get(practice, practice)} this week"
                 f"{injury}{prev} [{provenance(row)}]; plays in {p * 100:.0f}% of simulations. "
